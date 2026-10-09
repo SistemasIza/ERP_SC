@@ -1,0 +1,196 @@
+{
+  "organizations": [
+    {
+      "id": "org-local-001",
+      "name": "Sparktree Demo",
+      "plan": "pro",
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "org-local-002",
+      "name": "Empresa Cliente",
+      "plan": "basic",
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    }
+  ],
+  "users": [
+    {
+      "id": "admin-local-001",
+      "organization_id": "org-local-001",
+      "email": "admin+fabpsandoval@gmail.com",
+      "full_name": "Administrador",
+      "role": "super_admin",
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "user-local-002",
+      "organization_id": "org-local-001",
+      "email": "staff+fabpsandoval@gmail.com",
+      "full_name": "María García",
+      "role": "staff",
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    }
+  ],
+  "roles": [
+    {
+      "id": "super_admin",
+      "name": "Super Administrador",
+      "description": "Acceso total al sistema y todas las empresas",
+      "permissions": [
+        "*"
+      ]
+    },
+    {
+      "id": "admin",
+      "name": "Administrador",
+      "description": "Gestión completa de su empresa",
+      "permissions": [
+        "crm.*",
+        "users.read",
+        "users.write",
+        "dashboard.read"
+      ]
+    },
+    {
+      "id": "staff",
+      "name": "Staff",
+      "description": "Operaciones diarias del CRM",
+      "permissions": [
+        "crm.read",
+        "crm.write",
+        "dashboard.read"
+      ]
+    },
+    {
+      "id": "empresa",
+      "name": "Empresa",
+      "description": "Acceso a datos de negocio de su empresa",
+      "permissions": [
+        "crm.read",
+        "dashboard.read"
+      ]
+    },
+    {
+      "id": "agent",
+      "name": "Agente",
+      "description": "Gestión básica de leads asignados",
+      "permissions": [
+        "crm.leads.read",
+        "crm.leads.write"
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "id": "client-001",
+      "organization_id": "org-local-001",
+      "name": "Carlos Mendoza",
+      "email": "carlos@empresa.com",
+      "phone": "+5491123456789",
+      "company": "Mendoza SA",
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "client-002",
+      "organization_id": "org-local-001",
+      "name": "Ana Rodríguez",
+      "email": "ana@tech.io",
+      "phone": "+5491198765432",
+      "company": "Tech Solutions",
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "client-003",
+      "organization_id": "org-local-001",
+      "name": "Pedro López",
+      "email": "pedro@retail.com",
+      "phone": "+5491155554444",
+      "company": "Retail Plus",
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    }
+  ],
+  "leads": [
+    {
+      "id": "lead-001",
+      "organization_id": "org-local-001",
+      "name": "Laura Fernández",
+      "email": "laura@startup.com",
+      "phone": "+5491111111111",
+      "company": "Startup XYZ",
+      "stage": "new",
+      "source": "web",
+      "value": 5000,
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "lead-002",
+      "organization_id": "org-local-001",
+      "name": "Roberto Silva",
+      "email": "roberto@corp.com",
+      "phone": "+5491122222222",
+      "company": "Corp Industries",
+      "stage": "contacted",
+      "source": "referral",
+      "value": 12000,
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "lead-003",
+      "organization_id": "org-local-001",
+      "name": "Sofia Martínez",
+      "email": "sofia@design.co",
+      "company": "Design Co",
+      "stage": "qualified",
+      "source": "social",
+      "value": 8000,
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "lead-004",
+      "organization_id": "org-local-001",
+      "name": "Diego Torres",
+      "email": "diego@finance.com",
+      "phone": "+5491133333333",
+      "company": "Finance Group",
+      "stage": "proposal",
+      "source": "web",
+      "value": 25000,
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "lead-005",
+      "organization_id": "org-local-001",
+      "name": "Valentina Ruiz",
+      "email": "valentina@health.com",
+      "company": "Health Plus",
+      "stage": "won",
+      "source": "referral",
+      "value": 15000,
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    },
+    {
+      "id": "lead-006",
+      "organization_id": "org-local-001",
+      "name": "Martín Gómez",
+      "email": "martin@old.com",
+      "company": "Old Corp",
+      "stage": "lost",
+      "source": "other",
+      "value": 3000,
+      "created_at": "2026-06-15T13:50:11.969Z",
+      "updated_at": "2026-06-15T13:50:11.969Z"
+    }
+  ]
+}

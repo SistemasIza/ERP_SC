@@ -1,0 +1,369 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+
+  html,
+  body {
+    background-color: #ffffff;
+  }
+
+  html.dark,
+  html.dark body {
+    background-color: #252525;
+  }
+
+  :root {
+    --accent-50: 236 253 245;
+    --accent-100: 209 250 229;
+    --accent-200: 167 243 208;
+    --accent-300: 110 231 183;
+    --accent-400: 52 211 153;
+    --accent-500: 65 240 165;
+    --accent-600: 16 185 129;
+    --accent-700: 5 150 105;
+    --accent-800: 4 120 87;
+    --accent-900: 6 95 70;
+    --accent-950: 2 44 34;
+    --radius: 16px;
+    --table-cell-padding: 12px 16px;
+    --font-family: 'Outfit', 'Plus Jakarta Sans', 'Inter', sans-serif;
+    --badge-success: var(--accent-500);
+    --badge-warning: var(--accent-400);
+    --badge-danger: 244 63 94;
+    --badge-info: var(--accent-400);
+  }
+
+  html, body, #root {
+    font-family: var(--font-family);
+  }
+}
+
+@layer components {
+
+  /* Unified Card Component */
+  .card-panel {
+    @apply bg-white border border-slate-200/70 shadow-sm transition-colors duration-300;
+    border-radius: var(--radius);
+  }
+
+  .dark .card-panel {
+    @apply bg-dark-card border-white/5;
+  }
+
+  /* Density */
+  [data-density="compact"] .density-padding { padding: 6px 12px; }
+  [data-density="spacious"] .density-padding { padding: 20px 24px; }
+
+  /* Card style */
+  [data-card-style="flat"] .card-panel { box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-color: transparent; }
+  [data-card-style="glass"] .card-panel { background-color: rgba(255,255,255,0.7); backdrop-filter: blur(12px); border-color: rgba(226,232,240,0.5); }
+  .dark [data-card-style="glass"] .card-panel { background-color: rgba(36,36,36,0.6); border-color: rgba(51,51,51,0.5); }
+
+  /* Layout */
+  [data-layout="boxed"] .layout-container { max-width: 1400px; margin-left: auto; margin-right: auto; }
+
+  /* Radius */
+  .dynamic-radius { border-radius: var(--radius); }
+
+  /* Accent utility classes (for non-Tailwind usage) */
+  .accent-glow { box-shadow: 0 0 20px rgba(var(--accent-500), 0.15); }
+
+  /* Premium Studio Loader */
+  .loader {
+    width: 65px;
+    aspect-ratio: 1;
+    display: grid;
+    border: 4px solid #0000;
+    border-radius: 50%;
+    border-right-color: rgb(var(--accent-500));
+    animation: l15 1s infinite linear;
+    position: relative;
+  }
+
+  .loader::before,
+  .loader::after {
+    content: "";
+    grid-area: 1/1;
+    margin: 4px;
+    border: inherit;
+    border-radius: 50%;
+    animation: l15 2s infinite;
+  }
+
+  .loader::after {
+    margin: 12px;
+    animation-duration: 3s;
+  }
+
+  /* Loader medium — tablas, modales, standalone */
+  .loader-md {
+    width: 36px;
+    aspect-ratio: 1;
+    display: grid;
+    border: 3px solid #0000;
+    border-radius: 50%;
+    border-right-color: rgb(var(--accent-500));
+    animation: l15 1s infinite linear;
+    position: relative;
+  }
+
+  .loader-md::before,
+  .loader-md::after {
+    content: "";
+    grid-area: 1/1;
+    margin: 2px;
+    border: inherit;
+    border-radius: 50%;
+    animation: l15 2s infinite;
+  }
+
+  .loader-md::after {
+    margin: 6px;
+    animation-duration: 3s;
+  }
+
+  /* Loader small — botones con texto */
+  .loader-sm {
+    width: 20px;
+    aspect-ratio: 1;
+    display: grid;
+    border: 2px solid #0000;
+    border-radius: 50%;
+    border-right-color: rgb(var(--accent-500));
+    animation: l15 1s infinite linear;
+    position: relative;
+  }
+
+  .loader-sm::before,
+  .loader-sm::after {
+    content: "";
+    grid-area: 1/1;
+    margin: 2px;
+    border: inherit;
+    border-radius: 50%;
+    animation: l15 2s infinite;
+  }
+
+  .loader-sm::after {
+    margin: 5px;
+    animation-duration: 3s;
+  }
+
+  /* Loader extra-small — botones inline */
+  .loader-xs {
+    width: 16px;
+    aspect-ratio: 1;
+    display: grid;
+    border: 2px solid #0000;
+    border-radius: 50%;
+    border-right-color: rgb(var(--accent-500));
+    animation: l15 1s infinite linear;
+    position: relative;
+  }
+
+  .loader-xs::before,
+  .loader-xs::after {
+    content: "";
+    grid-area: 1/1;
+    margin: 1px;
+    border: inherit;
+    border-radius: 50%;
+    animation: l15 2s infinite;
+  }
+
+  .loader-xs::after {
+    margin: 4px;
+    animation-duration: 3s;
+  }
+
+  /* Progress bar shimmer animation */
+  .progress-bar-active {
+    position: relative;
+    overflow: hidden;
+  }
+  .progress-bar-active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
+    animation: shimmer 1.5s infinite;
+  }
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  /* Progress bar glow pulse */
+  .progress-bar-glow {
+    animation: glowPulse 2s ease-in-out infinite;
+  }
+  @keyframes glowPulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(var(--accent-500), 0.2); }
+    50% { box-shadow: 0 0 12px rgba(var(--accent-500), 0.5); }
+  }
+
+  /* Counter pop animation */
+  .counter-pop {
+    animation: counterPop 0.3s ease-out;
+  }
+  @keyframes counterPop {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+    100% { transform: scale(1); }
+  }
+
+  @keyframes l15 {
+    100% {
+      transform: rotate(1turn)
+    }
+  }
+
+  @keyframes slideInRight {
+    from {
+      opacity: 0;
+      transform: translateX(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes slideInLeft {
+    from {
+      opacity: 0;
+      transform: translateX(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes pulseOnline {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  .animate-slideInRight {
+    animation: slideInRight 0.3s ease-out;
+  }
+
+  .animate-slideInLeft {
+    animation: slideInLeft 0.3s ease-out;
+  }
+
+  .animate-pulseOnline {
+    animation: pulseOnline 2s ease-in-out infinite;
+  }
+
+  /* Custom Scrollbar for Sidebar */
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(139, 92, 246, 0.2);
+    border-radius: 4px;
+    transition: background-color 0.2s ease;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 92, 246, 0.5);
+  }
+
+  /* Dark mode scrollbar */
+  .dark .custom-scrollbar {
+    scrollbar-color: transparent transparent;
+  }
+
+  .dark .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(139, 92, 246, 0.15);
+  }
+
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 92, 246, 0.4);
+  }
+}
+
+/* ── Animated Button (expanding circles) ─────────────────────────── */
+.animated-btn {
+  position: relative;
+  cursor: pointer;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  padding: 0.6rem 1.4rem;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: background-color 0.3s ease, border-color 0.3s ease, transform 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.animated-btn:active {
+  transform: scale(0.96);
+}
+
+.animated-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.anim-circle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  height: 24px;
+  width: 24px;
+  border-radius: 50%;
+  opacity: 0;
+  transition: transform 1.2s ease, opacity 0.6s ease;
+  pointer-events: none;
+}
+
+.circle1 { background: rgba(var(--accent-400), 0.35); transform: translate(-3.3em, -4em); }
+.circle2 { background: rgba(var(--accent-500), 0.3);  transform: translate(-6em, 1.3em); }
+.circle3 { background: rgba(var(--accent-300), 0.25); transform: translate(-0.2em, 1.8em); }
+.circle4 { background: rgba(var(--accent-600), 0.3);  transform: translate(3.5em, 1.4em); }
+.circle5 { background: rgba(var(--accent-400), 0.25); transform: translate(3.5em, -3.8em); }
+
+.animated-btn:hover .anim-circle {
+  transform: translate(-50%, -50%) scale(5);
+  opacity: 1;
+  transition: transform 1.5s ease, opacity 0.8s ease;
+}
+
+.anim-text {
+  position: relative;
+  z-index: 2;
+}

@@ -1,0 +1,148 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: sparktree-postgres
+    environment:
+      POSTGRES_DB: sparktree_saas
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/install_complete.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./database/schema_automation.sql:/docker-entrypoint-initdb.d/02-automation.sql
+      - ./database/schema_ai.sql:/docker-entrypoint-initdb.d/03-ai.sql
+      - ./database/schema_webhooks.sql:/docker-entrypoint-initdb.d/04-webhooks.sql
+      - ./database/schema_public_api.sql:/docker-entrypoint-initdb.d/05-public-api.sql
+      - ./database/schema_rbac.sql:/docker-entrypoint-initdb.d/06-rbac.sql
+      - ./database/schema_billing.sql:/docker-entrypoint-initdb.d/07-billing.sql
+      - ./database/schema_analytics.sql:/docker-entrypoint-initdb.d/08-analytics.sql
+      - ./database/schema_crm.sql:/docker-entrypoint-initdb.d/09-crm.sql
+      - ./database/schema_notifications.sql:/docker-entrypoint-initdb.d/10-notifications.sql
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: sparktree-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: sparktree-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - AUTH_STATE_PATH=/tmp/auth_state
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: sparktree-worker
+    command: npm run worker:automation
+    environment:
+      - NODE_ENV=production
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: sparktree-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - certbot_certs:/etc/letsencrypt
+      - certbot_challenge:/var/www/certbot
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot
+    container_name: sparktree-certbot
+    volumes:
+      - certbot_certs:/etc/letsencrypt
+      - certbot_challenge:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
+  # Monitoring Stack
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: sparktree-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sparktree-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/sparktree-backend.json:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    container_name: sparktree-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  certbot_certs:
+  certbot_challenge:
+  prometheus_data:
+  grafana_data:
+  loki_data:

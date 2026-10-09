@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: sparktree_saas
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: apps/backend/package-lock.json
+
+    - name: Install dependencies
+      working-directory: ./apps/backend
+      run: npm ci
+
+    - name: Run linter
+      working-directory: ./apps/backend
+      run: npm run lint
+
+    - name: Run type check
+      working-directory: ./apps/backend
+      run: npm run type-check
+
+    - name: Run tests
+      working-directory: ./apps/backend
+      run: npm test
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: sparktree_saas
+        DB_USER: postgres
+        DB_PASSWORD: postgres
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+
+    - name: Build
+      working-directory: ./apps/backend
+      run: npm run build

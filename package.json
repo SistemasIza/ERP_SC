@@ -1,0 +1,30 @@
+{
+  "name": "sparktree-crm",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:workers": "cd workers && npm run dev",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "build:workers": "cd workers && npm run build",
+    "db:migrate:master": "ts-node database/scripts/migrate.ts master",
+    "db:migrate:tenant": "ts-node database/scripts/migrate.ts tenant",
+    "db:create:tenant": "ts-node database/scripts/migrate.ts create-tenant",
+    "start": "npm run start:backend",
+    "start:backend": "cd backend && npm start",
+    "start:frontend": "cd frontend && npm start"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "@ngrok/ngrok": "^1.7.0"
+  }
+}

@@ -1,0 +1,309 @@
+import WhatsAppService from '../services/whatsappService';
+import { supabase } from '../config/supabase';
+import axios from 'axios';
+
+export async function handleIncomingMessage(
+  message: any,
+  senderPhone: string,
+  organizationConfig: { phoneNumberId?: string; accessToken?: string, organizationId?: string, conversationId?: string, contactId?: string },
+  waService: any // Pass the service instance (Cloud or QR)
+) {
+  console.log(`[Bot Engine] ========== NEW MESSAGE ==========`);
+  console.log(`[Bot Engine] From: ${senderPhone}`);
+  console.log(`[Bot Engine] Message Type: ${message.type}`);
+  console.log(`[Bot Engine] Organization ID: ${organizationConfig.organizationId}`);
+  console.log(`[Bot Engine] Conversation ID: ${organizationConfig.conversationId}`);
+  console.log(`[Bot Engine] Contact ID: ${organizationConfig.contactId}`);
+  console.log(`[Bot Engine] Message Content:`, JSON.stringify(message, null, 2));
+
+  const saveOutgoingMessage = async (type: string, content: any, waResponse: any) => {
+    if (organizationConfig.organizationId && organizationConfig.conversationId && organizationConfig.contactId) {
+      // Handle both Cloud API and Baileys (QR) response formats
+      let messageId = null;
+      if (waResponse?.messages?.[0]?.id) {
+        // Cloud API format
+        messageId = waResponse.messages[0].id;
+      } else if (waResponse?.key?.id) {
+        // Baileys (QR) format
+        messageId = waResponse.key.id;
+      }
+
+      await supabase.from('messages').insert({
+        organization_id: organizationConfig.organizationId,
+        conversation_id: organizationConfig.conversationId,
+        contact_id: organizationConfig.contactId,
+        direction: 'outbound',
+        type: type,
+        content: typeof content === 'string' ? content : JSON.stringify(content),
+        status: 'sent',
+        whatsapp_message_id: messageId
+      });
+
+      await supabase
+        .from('conversations')
+        .update({ last_message_at: new Date().toISOString() })
+        .eq('id', organizationConfig.conversationId);
+    }
+  };
+
+  const executeNode = async (flow: any, nodeId: string) => {
+    let currentNodeId: string | null = nodeId;
+
+    while (currentNodeId) {
+      console.log(`[Flow Engine] Executing node ID: ${currentNodeId}`);
+      const node = flow.nodes.find((n: any) => n.id === currentNodeId);
+      if (!node) {
+        console.log(`[Flow Engine] Node ${currentNodeId} not found in flow definition!`);
+        break;
+      }
+      console.log(`[Flow Engine] Node type: ${node.type}`);
+
+      if (node.type === 'trigger') {
+        console.log(`[Flow Engine] Trigger node detected. Proceeding to connected block.`);
+      } else if (node.type === 'text') {
+        try {
+          console.log(`[Flow Engine] Sending text message: "${node.data?.text}" to ${senderPhone}`);
+          console.log(`[Flow Engine] Using WhatsApp service:`, waService.constructor.name);
+          const res = await waService.sendTextMessage(senderPhone, node.data?.text || '');
+          console.log(`[Flow Engine] Text message sent successfully. Response:`, res?.key ? 'OK (Baileys)' : res?.messages ? 'OK (Cloud API)' : 'Unknown');
+          console.log(`[Flow Engine] Full response:`, JSON.stringify(res, null, 2));
+          await saveOutgoingMessage('text', node.data?.text, res);
+        } catch (error) {
+          console.error(`[Flow Engine] ERROR sending text message:`, error);
+        }
+      } else if (node.type === 'interactive') {
+        const res = await waService.sendButtonMessage(
+          senderPhone,
+          node.data?.bodyText || '',
+          node.data?.buttons || []
+        );
+        // Guardar el response completo que incluye buttonMapping
+        await saveOutgoingMessage('interactive', res, res);
+        break; // Wait for user button click
+      } else if (node.type === 'media') {
+        const url = node.data?.mediaUrl;
+        if (url) {
+          const res = await waService.sendMediaMessage(senderPhone, url);
+          await saveOutgoingMessage('media', url, res);
+        }
+      } else if (node.type === 'capture') {
+        const res = await waService.sendTextMessage(senderPhone, node.data?.question || '?');
+        await saveOutgoingMessage('capture', node.data?.question, res);
+        await supabase
+          .from('contacts')
+          .update({ bot_state: `capture_${currentNodeId}` })
+          .eq('id', organizationConfig.contactId);
+        break; // Wait for user text input
+      } else if (node.type === 'webhook') {
+        try {
+          await axios({
+            method: node.data?.method || 'POST',
+            url: node.data?.url,
+            data: {
+              contactPhone: senderPhone,
+              contactId: organizationConfig.contactId
+            }
+          });
+        } catch (error) {
+          console.error('Webhook node failed:', error);
+        }
+      } else if (node.type === 'handoff') {
+        await supabase
+          .from('contacts')
+          .update({ bot_state: 'handoff' })
+          .eq('id', organizationConfig.contactId);
+        break; // Pause bot
+      } else if (node.type === 'delay') {
+        const waitTime = (node.data?.delaySeconds || 3) * 1000;
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+
+      // Find next node
+      const nextEdge = flow.edges.find((e: any) => e.source === currentNodeId);
+      if (nextEdge && nextEdge.target && !['interactive', 'capture', 'handoff'].includes(node.type)) {
+        console.log(`[Flow Engine] Moving to next node via edge: ${nextEdge.id} -> ${nextEdge.target}`);
+        currentNodeId = nextEdge.target;
+      } else {
+        console.log(`[Flow Engine] Flow execution stopped at node ${currentNodeId} (No valid next edge found or waiting for user input).`);
+        currentNodeId = null;
+      }
+    }
+  };
+
+  if (message.type === 'text') {
+    const textBody = message.text.body.trim();
+    const textLower = textBody.toLowerCase();
+    console.log(`[Bot Engine] Processing text message: "${textBody}" from ${senderPhone}`);
+
+    // Check if in handoff
+    const { data: contact } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('id', organizationConfig.contactId)
+      .single();
+
+    if (contact?.bot_state === 'handoff') {
+      console.log('[Bot Engine] Contact is in handoff mode. Bot is paused.');
+      return; // Bot is silent, human agent is handling
+    }
+
+    // Get active flow
+    const { data: flow, error: flowError } = await supabase
+      .from('flows')
+      .select('*')
+      .eq('organization_id', organizationConfig.organizationId)
+      .eq('is_active', true)
+      .limit(1)
+      .single();
+
+    if (flowError) {
+      console.error('[Bot Engine] Error fetching active flow:', flowError);
+    } else if (flow) {
+      console.log(`[Bot Engine] Active flow found: ${flow.name} (ID: ${flow.id})`);
+      console.log(`[Bot Engine] Flow has ${flow.nodes?.length || 0} nodes and ${flow.edges?.length || 0} edges`);
+      
+      // Log flow structure for debugging
+      if (flow.nodes && flow.nodes.length > 0) {
+        console.log(`[Bot Engine] Available trigger nodes:`);
+        flow.nodes.filter((n: any) => n.type === 'trigger').forEach((node: any) => {
+          console.log(`[Bot Engine] - Trigger "${node.data?.name || 'unnamed'}" (ID: ${node.id}) with keywords:`, node.data?.keywords || []);
+        });
+      }
+    } else {
+      console.log('[Bot Engine] No active flow found for this organization.');
+      return;
+    }
+
+    // Check if waiting for capture input
+    if (contact?.bot_state?.startsWith('capture_') && flow) {
+      const captureNodeId = contact.bot_state.split('_')[1];
+      const captureNode = flow.nodes.find((n: any) => n.id === captureNodeId);
+
+      if (captureNode) {
+        const varName = captureNode.data?.variableName || 'respuesta';
+        const currentAttrs = contact.custom_attributes || {};
+        currentAttrs[varName] = textBody;
+
+        await supabase
+          .from('contacts')
+          .update({ custom_attributes: currentAttrs, bot_state: 'main_menu' })
+          .eq('id', organizationConfig.contactId);
+
+        const nextEdge = flow.edges.find((e: any) => e.source === captureNode.id);
+        if (nextEdge && nextEdge.target) {
+          await executeNode(flow, nextEdge.target);
+        }
+        return;
+      }
+    }
+
+    let matchedTriggerNode = null;
+
+    if (flow && flow.nodes) {
+      matchedTriggerNode = flow.nodes.find((n: any) =>
+        n.type === 'trigger' &&
+        n.data?.keywords?.some((k: string) => textLower.includes(k.toLowerCase()))
+      );
+      if (matchedTriggerNode) {
+        console.log(`[Bot Engine] ✓ Matched trigger node: ${matchedTriggerNode.id} with keywords:`, matchedTriggerNode.data?.keywords);
+      } else {
+        console.log(`[Bot Engine] ✗ No trigger matched for message: "${textBody}"`);
+        console.log(`[Bot Engine] Available keywords in flow:`);
+        flow.nodes.filter((n: any) => n.type === 'trigger').forEach((node: any) => {
+          console.log(`[Bot Engine] - Node ${node.id}:`, node.data?.keywords || []);
+        });
+      }
+    }
+
+    if (matchedTriggerNode && flow) {
+      console.log('[Bot Engine] Trigger matched, starting flow execution');
+      console.log(`[Bot Engine] Searching for edges from source node ID: "${matchedTriggerNode.id}"`);
+      const firstEdge = flow.edges.find((e: any) => e.source === matchedTriggerNode.id);
+      
+      if (firstEdge) {
+        console.log(`[Bot Engine] Found edge: ${firstEdge.id} -> target: ${firstEdge.target}`);
+        if (firstEdge.target) {
+          console.log(`[Bot Engine] Calling executeNode for: ${firstEdge.target}`);
+          await executeNode(flow, firstEdge.target);
+          console.log('[Bot Engine] executeNode completed.');
+        } else {
+          console.log('[Bot Engine] Edge target is missing.');
+        }
+      } else {
+        console.log('[Bot Engine] Trigger node has no outgoing connections (Check if edge source ID matches node ID exactly).');
+        console.log('[Bot Engine] Available edges in flow:', JSON.stringify(flow.edges));
+      }
+      return;
+    }
+
+    // Handle Interactive Button replies
+    if (message.type === 'interactive') {
+      const buttonId = message.interactive.button_reply.id;
+
+      const { data: flow } = await supabase
+        .from('flows')
+      
+      // Get the last conversation to find the button mapping
+      const { data: lastMessage } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', organizationConfig.conversationId)
+        .eq('direction', 'outbound')
+        .eq('type', 'interactive')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (lastMessage && lastMessage.content) {
+        try {
+          // El contenido ya está guardado como JSON string, necesitamos parsearlo
+          let messageContent;
+          if (typeof lastMessage.content === 'string') {
+            messageContent = JSON.parse(lastMessage.content);
+          } else {
+            messageContent = lastMessage.content;
+          }
+          
+          console.log(`[Bot Engine] Parsed message content:`, JSON.stringify(messageContent, null, 2));
+          
+          // Check if this message had button mapping
+          if (messageContent.buttonMapping && messageContent.buttonMapping[userResponse]) {
+            const buttonId = messageContent.buttonMapping[userResponse];
+            console.log(`[Bot Engine] Mapped numeric response: ${userResponse} → ${buttonId}`);
+            
+            // Get the active flow
+            const { data: flow } = await supabase
+              .from('flows')
+              .select('*')
+              .eq('organization_id', organizationConfig.organizationId)
+              .eq('is_active', true)
+              .limit(1)
+              .single();
+            
+            if (flow && flow.edges) {
+              const edge = flow.edges.find((e: any) => e.sourceHandle === buttonId || e.source === buttonId);
+              if (edge && edge.target) {
+                console.log(`[Bot Engine] Found edge for button ${buttonId}, moving to node: ${edge.target}`);
+                await executeNode(flow, edge.target);
+                return;
+              }
+            }
+          } else {
+            console.log(`[Bot Engine] No button mapping found for response: ${userResponse}`);
+            console.log(`[Bot Engine] Available mappings:`, messageContent.buttonMapping);
+          }
+        } catch (parseError) {
+          console.log(`[Bot Engine] Could not parse message content for button mapping:`, parseError);
+        }
+      } else {
+        console.log(`[Bot Engine] No last interactive message found for conversation ${organizationConfig.conversationId}`);
+      }
+    }
+  }
+
+  // Fallback if no trigger matched and no button response was processed
+  console.log('[Bot Engine] No trigger matched. Checking for default catch-all node or sending fallback.');
+  const fallbackText = 'No entendí ese comando. Intenta con otras palabras clave configuradas en tus Flujos.';
+  const res = await waService.sendTextMessage(senderPhone, fallbackText);
+  await saveOutgoingMessage('text', fallbackText, res);
+}

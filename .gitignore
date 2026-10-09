@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+debug_requests.log
+
+# IDE
+.gemini/
+.vscode/settings.json
+
+# Temporary files
+tmp/
+tmp_keys.txt
+
+# WhatsApp auth sessions (Baileys)
+auth_info_baileys/
+auth_info_*/
+
+# Debug output
+*.debug.json
+db_out.json
+result_users.json
+users_debug.json
+users_list.json
