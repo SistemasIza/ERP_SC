@@ -36,7 +36,7 @@ services:
 
   backend:
     build:
-      context: ./apps/backend
+      context: ./backend
       dockerfile: Dockerfile
     container_name: sparktree-backend
     ports:
@@ -52,13 +52,12 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:
-      - postgres
       - redis
     restart: unless-stopped
 
   worker:
     build:
-      context: ./apps/backend
+      context: ./workers
       dockerfile: Dockerfile
     container_name: sparktree-worker
     command: npm run worker:automation
@@ -69,7 +68,6 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on:
-      - postgres
       - redis
     restart: unless-stopped
 
