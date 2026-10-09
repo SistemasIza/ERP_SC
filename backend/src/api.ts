@@ -44,13 +44,18 @@ import reminderRoutes from './modules/reminders/reminders.routes';
 import messageTemplateRoutes from './modules/templates/messageTemplates.routes';
 import auditRoutes from './modules/audit/audit.routes';
 
-import { securityHeaders, globalRateLimit, apiRateLimit, authRateLimit } from './security/middleware/security.middleware';
+import { securityHeaders, globalRateLimit, apiRateLimit, authRateLimit, webhookRateLimit } from './security/middleware/security.middleware';
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
 const httpServer = createServer(app);
+
+// Detrás de Vercel/proxy, req.ip debe reflejar la IP real del cliente (X-Forwarded-For).
+// Sin esto, todo el tráfico "parece" venir de una sola IP y TODOS comparten el mismo
+// cupo del rate-limiter (incluidos los webhooks de Meta) => 429 y mensajes perdidos.
+app.set('trust proxy', true);
 
 // WebSocket setup for real-time connection status (RF-02)
 // const io = new Server(httpServer, {
@@ -143,8 +148,16 @@ app.use(cors({
 app.use(helmet());
 app.use(securityHeaders);
 
-// Global rate limit per IP (webhooks y rutas públicas incluidas)
-app.use(globalRateLimit);
+// Global rate limit per IP (webhooks y rutas públicas incluidas).
+// Los webhooks (Meta y demás plataformas) quedan EXCENTOS de este límite: llevan un
+// limitador propio y más generoso (webhookRateLimit) para que la entrega de mensajes
+// no se estrangule por el resto del tráfico (polls del frontend, 401, etc.).
+app.use((req, res, next) => {
+  if (req.path === '/api/webhook' || req.path.startsWith('/api/webhooks')) {
+    return next();
+  }
+  return globalRateLimit(req, res, next);
+});
 
 // Initialize request start time BEFORE body parsing so that errors raised
 // by express.json (e.g. malformed JSON) still have a valid startTime.
@@ -282,8 +295,10 @@ import { authenticateToken } from './core/middleware/auth';
 import { tenantMiddleware } from './core/middleware/tenant';
 
 // Webhook routes (no auth required - Meta sends no auth headers)
+app.use('/api/webhook', webhookRateLimit);
 app.get('/api/webhook', verifyWebhook);
 app.post('/api/webhook', handleIncomingWebhook);
+app.use('/api/webhooks', webhookRateLimit);
 app.use('/api/webhooks', webhookRoutes);
 
 // Enforce authentication + tenant isolation + API rate limit on every /api request
@@ -451,17 +466,10 @@ httpServer.listen(PORT, async () => {
   console.log(`🌐 Platform Connections API: http://localhost:${PORT}/api/platform/connections`);
   console.log(`🔗 Webhooks: http://localhost:${PORT}/api/webhooks`);
 
-  // Start ngrok forwarding for webhooks
-  try {
-    const ngrok = require("@ngrok/ngrok");
-    const forwarder = await ngrok.forward({
-      addr: PORT,
-      authtoken_from_env: true,
-    });
-    console.log(`🌐 Ngrok available at: ${forwarder.url()}`);
-  } catch (error) {
-    console.error("Failed to start ngrok:", error);
-  }
+  // Los webhooks se exponen de forma ESTABLE a través del rewrite de Vercel:
+  //   Meta/plataformas -> https://FRONTEND_URL/api/webhook -> Vercel -> http://VPS:3000/api/webhook
+  // No se usa ngrok (cambia de URL en cada reinicio y rompe la entrega de Meta).
+  console.log(`🌐 Webhooks públicos: ${process.env.FRONTEND_URL || 'http://localhost:3000'}/api/webhook`);
 });
 
 export default app;

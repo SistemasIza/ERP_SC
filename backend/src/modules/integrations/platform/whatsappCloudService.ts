@@ -93,7 +93,10 @@ config: {
 
   private async setupWebhook(connection: PlatformConnection): Promise<void> {
     try {
-      const backendUrl = process.env.BACKEND_URL || 'http://localhost:3000';
+      // Vercel reescribe /api/* -> VPS:3000, así que el webhook se expone por una URL
+      // ESTABLE (FRONTEND_URL), sin depender de tunnels temporales (ngrok) que cambian
+      // de URL en cada reinicio y rompen la entrega de Meta.
+      const backendUrl = process.env.BACKEND_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
       const webhookUrl = `${backendUrl}/api/webhook`;
       const verifyToken = connection.config.webhookVerifyToken;
 
