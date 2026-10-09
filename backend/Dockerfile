@@ -1,7 +1,7 @@
 # Dockerfile for Sparktree SaaS Backend
 # Implements containerized deployment with directory isolation (RNF-04, RNF-05)
 
-FROM node:20-alpine
+FROM node:22-alpine
 
 # Set working directory
 WORKDIR /app
