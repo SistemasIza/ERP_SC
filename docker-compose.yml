@@ -60,7 +60,6 @@ services:
       context: ./workers
       dockerfile: Dockerfile
     container_name: sparktree-worker
-    command: npm run worker:automation
     environment:
       - NODE_ENV=production
       - SUPABASE_URL=${SUPABASE_URL}
