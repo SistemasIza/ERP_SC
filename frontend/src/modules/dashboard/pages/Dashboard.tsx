@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, MessageSquare, Activity, Box, Zap, ChevronRight, UserPlus, Share2, AlertCircle, LayoutDashboard, Play, Target, Wallet, Gift, BellRing } from 'lucide-react';
+import { Users, MessageSquare, Activity, Box, Zap, ChevronRight, UserPlus, LayoutDashboard, Play, Target, Wallet, Gift, BellRing } from 'lucide-react';
 import { getAnalytics, getDashboardAnalytics, getCrmDashboard, getOrders, getQuotes, getPromotions, getReminders } from '../../../services/api';
 import { PageContainer } from '../../../components/layout/PageContainer';
 import { PageBody } from '../../../components/layout/PageBody';
@@ -46,7 +46,7 @@ export const Dashboard = () => {
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
   const [dashboardActivity, setDashboardActivity] = useState<any[]>([]);
   const [dashboardInsights, setDashboardInsights] = useState<any[]>([]);
-  const [messagesToday, setMessagesToday] = useState(0);
+  const [, setMessagesToday] = useState(0);
 
   const platformData = [
     { id: 'whatsapp', name: 'WhatsApp', icon: FaWhatsapp, color: 'text-emerald-500', route: '/whatsapp-qr' },
@@ -136,7 +136,6 @@ export const Dashboard = () => {
 
   if (loading) return <PageLoader sectionName="Dashboard" />;
 
-  const connectedChannels = connections.filter(c => c.status === 'connected').length;
   const firstName = user?.full_name?.split(' ')[0] || 'usuario';
 
   const quickActions = [
@@ -152,12 +151,6 @@ export const Dashboard = () => {
         highlight={`${firstName} 👋`}
         description="Todo está funcionando correctamente en tu ecosistema inteligente."
         icon={LayoutDashboard}
-        meta={[
-          { label: 'Conversaciones hoy', value: messagesToday.toLocaleString(), icon: MessageSquare, color: 'accent' },
-          { label: 'Canales activos', value: connectedChannels, icon: Share2, color: 'blue' },
-          { label: 'Contactos', value: dashboardStats.totalContacts.toLocaleString(), icon: Users, color: 'emerald' },
-          { label: 'Alertas críticas', value: '0', icon: AlertCircle, color: 'amber' },
-        ]}
         action={
           <div className="flex flex-wrap gap-2">
             <HeaderButton

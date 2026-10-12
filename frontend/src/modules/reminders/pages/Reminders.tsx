@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Send, Play, Pause, Trash2, Eye, Plus, Bell, RefreshCw, AlertTriangle,
-  Clock, RotateCcw, Calendar, Download, CheckCircle, X, Users, LayoutGrid,
+  Clock, RotateCcw, Calendar, Download, X, Users, LayoutGrid,
   MessageSquare, Search, MoreVertical, FileSpreadsheet, CheckCircle2,
-  XCircle, AlertCircle, Sparkles, Reply
+  XCircle, AlertCircle, Reply
 } from 'lucide-react';
 import { PageContainer } from '../../../components/layout/PageContainer';
 import { PageHeader } from '../../../components/layout/PageHeader';
@@ -11,7 +11,8 @@ import { PageBody } from '../../../components/layout/PageBody';
 import { DataTable } from '../../../components/ui/DataTable';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
 import { Loader } from '../../../components/ui/Loader';
-import { AnimatedButton } from '../../../components/ui/AnimatedButton';
+import { HeaderButton } from '../../../components/ui/HeaderButton';
+import { CountBadge } from '../../../components/ui/CountBadge';
 import { KebabMenu } from '../../../components/ui/KebabMenu';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 import { SearchBar } from '../../../components/ui/SearchBar';
@@ -534,15 +535,9 @@ export const Reminders = () => {
         title="Recordatorios"
         description="Envía mensajes automatizados programados a tus contactos y genera reportes de entrega"
         icon={Bell}
-        meta={[
-          { label: 'Recordatorios', value: reminders.length, icon: Bell, color: 'accent' },
-          { label: 'Entregados', value: reminders.reduce((acc, r) => acc + r.sent, 0), icon: CheckCircle, color: 'emerald' },
-          { label: 'Fallidos', value: reminders.reduce((acc, r) => acc + r.failed, 0), icon: XCircle, color: 'red' },
-          { label: 'Activos', value: reminders.filter((r) => r.status === 'sending' || r.status === 'paused').length, icon: Send, color: 'blue' },
-          { label: 'Programados', value: reminders.filter((r) => r.status === 'scheduled').length, icon: Clock, color: 'amber' },
-        ]}
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <CountBadge count={reminders.length} />
             <button
               onClick={handleExportGeneral}
               disabled={exportingGeneral || reminders.length === 0}
@@ -552,9 +547,9 @@ export const Reminders = () => {
               <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
               <span>{exportingGeneral ? 'Exportando...' : 'Reporte General (Excel)'}</span>
             </button>
-            <AnimatedButton variant="accent" onClick={() => setShowCreate(true)} className="!px-4 !h-10 !text-sm !font-bold">
-              <Plus className="w-4 h-4" /> Nuevo Recordatorio
-            </AnimatedButton>
+            <HeaderButton onClick={() => setShowCreate(true)} icon={<Plus className="w-4 h-4" />}>
+              Nuevo Recordatorio
+            </HeaderButton>
           </div>
         }
       />

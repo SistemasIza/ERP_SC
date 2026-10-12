@@ -14,7 +14,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { useNotifications } from '../../../contexts/NotificationContext';
 
 export const Conversations = () => {
-  const { addNotification } = useNotifications();
+  const { addNotification, dismissHandoffAlert } = useNotifications();
   const { id } = useParams();
   const navigate = useNavigate();
   const [conversations, setConversations] = useState<any[]>([]);
@@ -894,6 +894,7 @@ export const Conversations = () => {
       if (contactId) {
         await deleteUser(contactId);
       }
+      dismissHandoffAlert(conversationId);
       setConversations(prev => prev.filter(c => c._id !== conversationId));
       if (selectedConv?._id === conversationId) setSelectedConv(null);
     } catch (err) {
@@ -943,6 +944,7 @@ export const Conversations = () => {
     setIsMenuOpen(false);
     try {
       await api.post(`/conversations/${selectedConv._id}/reactivate-bot`);
+      dismissHandoffAlert(selectedConv._id);
       if (selectedConv.contactId) {
         selectedConv.contactId.bot_state = null;
         selectedConv.contactId.botState = null;

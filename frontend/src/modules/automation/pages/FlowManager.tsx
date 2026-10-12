@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Bot, Plus, Edit, Trash2, Copy, Sparkles, UserCheck, Tag, X, Activity, DollarSign, LifeBuoy, Megaphone, Compass, HelpCircle, Key, MessageSquare, LayoutGrid } from 'lucide-react';
+import { Bot, Plus, Edit, Trash2, Copy, Sparkles, UserCheck, Tag, X, DollarSign, LifeBuoy, Megaphone, Compass, HelpCircle, Key, MessageSquare, LayoutGrid } from 'lucide-react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { FlowBuilderContent } from '../components/FlowBuilderContent';
 import { flowService, FlowBot } from '../../../services/flowService';
@@ -282,9 +282,6 @@ export const FlowManager = () => {
 
   if (loading) return <PageLoader sectionName="Gestor de Flujos" />;
 
-  const totalFlows = flows.length;
-  const activeFlows = flows.filter(f => f.status === 'active').length;
-  const inactiveFlows = flows.filter(f => f.status !== 'active').length;
   return (
     <PageContainer>
       {renderEditor()}
@@ -293,11 +290,6 @@ export const FlowManager = () => {
         highlight="Bots AI"
         description="Configura el comportamiento y las respuestas automatizadas de tu bot."
         icon={Bot}
-        meta={[
-          { label: 'Flujos', value: totalFlows, icon: LayoutGrid, color: 'accent' },
-          { label: 'Activos', value: activeFlows, icon: Activity, color: 'emerald' },
-          { label: 'Inactivos', value: inactiveFlows, icon: Activity, color: 'amber' },
-        ]}
         action={
           <div className="flex items-center gap-3">
             <CountBadge count={flows.length} />

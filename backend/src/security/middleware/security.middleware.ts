@@ -44,7 +44,7 @@ export const authRateLimit = rateLimit(15 * 60 * 1000, process.env.NODE_ENV === 
 /**
  * API rate limiting
  */
-export const apiRateLimit = rateLimit(60 * 1000, 100); // 100 requests per minute
+export const apiRateLimit = rateLimit(60 * 1000, 400); // 400 requests per minute (pollers frontend + agentes por IP)
 
 /**
  * Generous rate limiting for webhooks (Meta y plataformas entregan por lotes).
@@ -55,7 +55,7 @@ export const webhookRateLimit = rateLimit(60 * 1000, 6000); // 6000 requests per
 /**
  * Global rate limiting
  */
-export const globalRateLimit = rateLimit(60 * 1000, 1000); // 1000 requests per minute
+export const globalRateLimit = rateLimit(60 * 1000, 2000); // 2000 requests per minute
 
 /**
  * Security headers middleware

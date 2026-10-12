@@ -26,6 +26,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, ReactNod
 import { Bell, AlertTriangle, CheckCircle, Info } from 'lucide-react';
 import { getConversations, getLeads } from '../services/api';
 import { useNotifications as useReapopNotifications } from 'reapop';
+import { useAuth } from './AuthContext';
 
 // =============================================================================
 // TIPOS E INTERFACES
@@ -52,11 +53,12 @@ export interface Notification {
  */
 interface NotificationContextType {
   notifications: Notification[]; // Lista de todas las notificaciones
-  addNotification: (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => void; // Añadir notificación
+  addNotification: (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => Notification; // Añadir notificación
   markAsRead: (id: string) => void; // Marcar como leída
   markAllAsRead: () => void; // Marcar todas como leídas
   removeNotification: (id: string) => void; // Eliminar una notificación
   clearNotifications: () => void; // Limpiar todas
+  dismissHandoffAlert: (conversationId: string) => void; // Eliminar alerta de asistente humano por conversación
   unreadCount: number; // Contador de no leídas
 }
 
@@ -90,13 +92,18 @@ interface NotificationProviderProps {
  */
 export const NotificationProvider: React.FC<NotificationProviderProps> = ({ children }) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const { user } = useAuth();
   const { notify } = useReapopNotifications();
+  // Rastrea qué alertas de asistente humano se han disparado por conversación
+  // (conversationId -> id de la notificación) para poder eliminarlas al resolverse.
+  const handoffAlertIds = useRef<Map<string, string>>(new Map());
 
   /**
    * Añade una nueva notificación al sistema
    * @param notification Datos de la notificación (sin id, timestamp ni read)
+   * @returns La notificación creada (para poder rastrearla)
    */
-  const addNotification = (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
+  const addNotification = (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>): Notification => {
     const newNotification: Notification = {
       ...notification,
       id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -121,6 +128,8 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
         }
       ] : []
     });
+
+    return newNotification;
   };
 
   /**
@@ -156,6 +165,18 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
   };
 
   /**
+   * Elimina la alerta de "asistente humano" de una conversación concreta.
+   * Se usa cuando la conversación se atiende, reactiva el bot o se elimina.
+   */
+  const dismissHandoffAlert = (conversationId: string) => {
+    const notificationId = handoffAlertIds.current.get(conversationId);
+    if (notificationId) {
+      removeNotification(notificationId);
+      handoffAlertIds.current.delete(conversationId);
+    }
+  };
+
+  /**
    * Contador de notificaciones no leídas
    */
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -171,8 +192,21 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
    * - Genera notificaciones automáticamente
    */
   useEffect(() => {
+    // Solo verificamos mientras haya sesión iniciada: con el usuario deslogueado
+    // (pantalla de login) se evita bombardear la API con 401 y contribuir al rate-limit.
+    if (!user) return;
+
     let lastLatestMessageTime: string | null = null;
-    const handoffAlerted = new Set<string>();
+    let interval: ReturnType<typeof setInterval> | undefined;
+    let stopped = false;
+
+    const stopPolling = () => {
+      stopped = true;
+      if (interval) clearInterval(interval);
+      interval = undefined;
+    };
+
+    const startPolling = (ms = 30000) => setInterval(checkNewMessages, ms);
 
     /**
      * Verifica si hay nuevos mensajes de leads
@@ -181,6 +215,7 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
      * - Crea notificaciones para nuevos mensajes
      */
     const checkNewMessages = async () => {
+      if (stopped || !user) return;
       try {
         // Obtener leads para filtrado
         const responseLeads = await getLeads().catch(() => []);
@@ -230,15 +265,15 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
         // Cuando un cliente solicita un humano, el bot fija contacts.bot_state='handoff'
         // (devuelto como conv.botState). Se dispara una alerta en la campana (una sola vez
         // por conversación) para que un agente atienda el chat.
-        const handoffConvs = (Array.isArray(convs) ? convs : []).filter(
-          (c: any) => c.botState === 'handoff' && c._id && !handoffAlerted.has(c._id)
+        const convList = Array.isArray(convs) ? convs : [];
+        const handoffConvs = convList.filter(
+          (c: any) => c.botState === 'handoff' && c._id && !handoffAlertIds.current.has(c._id)
         );
         for (const hc of handoffConvs) {
-          handoffAlerted.add(hc._id);
           const phoneNumber = hc.contactId?.phoneNumber;
           const hasName = hc.contactId?.name && hc.contactId.name !== 'Sin nombre';
           const contactInfo = hasName ? hc.contactId.name : (phoneNumber || 'Un cliente');
-          addNotification({
+          const alert = addNotification({
             type: 'warning',
             title: 'Solicitud de asistente humano',
             message: `${contactInfo} pide hablar con un agente.`,
@@ -249,34 +284,54 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
               }
             }
           });
+          handoffAlertIds.current.set(hc._id, alert.id);
         }
-      } catch (error) {
-        console.error('Error checking new messages:', error);
+
+        // ── Limpieza: si la conversación dejó de estar en handoff (se atendió,
+        // se reactivó el bot o se eliminó), la alerta desaparece automáticamente.
+        for (const [convId, notificationId] of handoffAlertIds.current.entries()) {
+          const conv = convList.find((c: any) => c._id === convId);
+          if (conv && conv.botState !== 'handoff') {
+            removeNotification(notificationId);
+            handoffAlertIds.current.delete(convId);
+          }
+        }
+      } catch (error: any) {
+        const status = error?.response?.status;
+        // Sesión no válida/expirada: dejamos de consultar para no bombardear la API con 401.
+        if (status === 401 || status === 403) {
+          stopPolling();
+        } else if (status === 429) {
+          // Rate limit: espaciamos el siguiente intento a 60 segundos.
+          if (interval) clearInterval(interval);
+          interval = startPolling(60000);
+        } else {
+          console.error('Error checking new messages:', error);
+        }
       }
     };
 
     // Configurar verificación periódica (cada 30 segundos para reducir carga del servidor)
-    const startPolling = () => setInterval(checkNewMessages, 30000);
-    let interval: ReturnType<typeof setInterval> | undefined = startPolling();
+    interval = startPolling();
     checkNewMessages(); // Verificación inicial
 
     const onVisibility = () => {
       if (document.hidden) {
         if (interval) clearInterval(interval);
         interval = undefined;
-      } else if (!interval) {
+      } else if (!stopped && !interval) {
         checkNewMessages();
         interval = startPolling();
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
 
-    // Cleanup al desmontar
+    // Cleanup al desmontar o al cambiar el usuario (login/logout)
     return () => {
       if (interval) clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, []); // Sin dependencias para ejecutar solo una vez
+  }, [user]);
 
   return (
     <NotificationContext.Provider value={{
@@ -286,6 +341,7 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
       markAllAsRead,
       removeNotification,
       clearNotifications,
+      dismissHandoffAlert,
       unreadCount
     }}>
       {children}

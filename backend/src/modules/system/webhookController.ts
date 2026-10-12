@@ -199,8 +199,8 @@ async function processIncomingMessage(message: any, changeValue: any) {
     const profileName = changeValue.contacts?.[0]?.profile?.name || '';
     const receivingPhoneId = changeValue.metadata.phone_number_id;
 
-    // Ignore messages from groups
-    if (message.participant || senderPhone.includes('@g.us')) {
+    // Ignore messages from groups (or malformed test payloads without `from`)
+    if (message.participant || !senderPhone || senderPhone.includes('@g.us')) {
       return;
     }
 
