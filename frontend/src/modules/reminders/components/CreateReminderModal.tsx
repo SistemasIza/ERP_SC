@@ -828,8 +828,9 @@ export const CreateReminderModal = ({ open, onClose, onCreated }: CreateReminder
                     <select
                       value={metaTemplateName}
                       onChange={(e) => {
-                        const tpl = metaTemplates.find((t) => t.name === e.target.value);
-                        setMetaTemplateName(e.target.value);
+                        const val = e.target.value.trim();
+                        const tpl = metaTemplates.find((t) => t.name === val);
+                        setMetaTemplateName(val);
                         setMetaTemplateLanguage(tpl?.language || 'es');
                         if (tpl) {
                           const bodyComp = tpl.components?.find((c: any) => c.type === 'BODY');

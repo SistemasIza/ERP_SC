@@ -45,7 +45,10 @@ CREATE TABLE IF NOT EXISTS public.reminder_contacts (
   status varchar(50) NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'sent', 'failed', 'skipped')),
   error_message text,
+  whatsapp_message_id text,
   sent_at timestamptz,
+  delivered_at timestamptz,
+  read_at timestamptz,
   created_at timestamptz DEFAULT now()
 );
 

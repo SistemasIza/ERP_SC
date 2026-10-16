@@ -909,13 +909,14 @@ export class RemindersService {
       // enviamos parameter_name a una plantilla posicional (o index a una nombrada).
       let tplUseNamedParams = true;
       let tplLang = (reminder.meta_template_language || 'es') as string;
-      if (isCloudApi && reminder.meta_template_name) {
+      const rawTplName = reminder.meta_template_name ? String(reminder.meta_template_name).trim() : null;
+      if (isCloudApi && rawTplName) {
         tplLang = reminder.meta_template_language || 'es';
         try {
           const templates = await whatsappCloudService.getMetaTemplates(connection.id);
           const metaTpl = (templates || []).find(
-            (t: any) => t.name === reminder.meta_template_name && t.language === tplLang
-          ) || (templates || []).find((t: any) => t.name === reminder.meta_template_name);
+            (t: any) => t.name === rawTplName && t.language === tplLang
+          ) || (templates || []).find((t: any) => t.name === rawTplName);
           const body = (metaTpl?.components || []).find((c: any) => c.type === 'BODY') || {};
           const raw: any[] = body.variables || [];
           if (raw.length > 0) {
@@ -943,7 +944,8 @@ export class RemindersService {
         try {
           const text = renderTemplate(reminder.message_template, contact.variables);
           const phone = normalizePhone(contact.phone);
-          if (isCloudApi && reminder.meta_template_name) {
+          let sendResult: any;
+          if (isCloudApi && rawTplName) {
             const langCode = tplLang;
             if (!(adapter as any).sendTemplateMessage) {
               throw new Error('sendTemplateMessage no disponible en el adaptador');
@@ -962,20 +964,23 @@ export class RemindersService {
               }
               return base;
             });
-            console.log(`[Reminders] Template: "${reminder.meta_template_name}", lang: ${langCode}, formato: ${tplUseNamedParams ? 'nombrado' : 'posicional'}, vars: [${varNames.join(', ')}]`);
+            console.log(`[Reminders] Template: "${rawTplName}", lang: ${langCode}, formato: ${tplUseNamedParams ? 'nombrado' : 'posicional'}, vars: [${varNames.join(', ')}]`);
             if (varNames.length > 0) {
-              await (adapter as any).sendTemplateMessage(phone, reminder.meta_template_name, langCode, [
+              sendResult = await (adapter as any).sendTemplateMessage(phone, rawTplName, langCode, [
                 { type: 'body', parameters },
               ]);
             } else {
               console.log(`[Reminders] Sending template without parameters`);
-              await (adapter as any).sendTemplateMessage(phone, reminder.meta_template_name, langCode);
+              sendResult = await (adapter as any).sendTemplateMessage(phone, rawTplName, langCode);
             }
           } else if (reminder.image_base64 && !isCloudApi) {
-            await (adapter as any).sendImageMessage(phone, reminder.image_base64, text);
+            sendResult = await (adapter as any).sendImageMessage(phone, reminder.image_base64, text);
           } else {
-            await adapter.sendTextMessage(phone, text);
+            sendResult = await adapter.sendTextMessage(phone, text);
           }
+
+          // wamid (Cloud API) / key.id (Baileys): permite cruzar los status webhooks.
+          const wamid: string | null = sendResult?.messages?.[0]?.id || sendResult?.key?.id || null;
 
           currentSent++;
           await supabase
@@ -984,6 +989,7 @@ export class RemindersService {
               status: 'sent',
               sent_at: new Date().toISOString(),
               error_message: null,
+              whatsapp_message_id: wamid,
             })
             .eq('id', contact.id);
 

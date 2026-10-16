@@ -3,12 +3,10 @@ import { supabase } from '../../core/config/supabase';
 import { auditLogService } from '../audit/auditLogService';
 
 import bcrypt from 'bcryptjs';
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
 
 function logToDebug(msg: string) {
-  fs.appendFileSync(path.join(__dirname, '../../debug_requests.log'), `[AUTH DEBUG] ${new Date().toISOString()} ${msg}\n`);
+  console.log(`[AUTH DEBUG] ${new Date().toISOString()} ${msg}`);
 }
 
 const router = express.Router();
@@ -35,7 +33,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    logToDebug(`User found: ${user.email}. Hash: ${user.password_hash}`);
+    logToDebug(`User found: ${user.email}`);
 
     // Verify password with bcrypt
     const isValid = await bcrypt.compare(password, user.password_hash);

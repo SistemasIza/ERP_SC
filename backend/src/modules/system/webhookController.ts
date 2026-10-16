@@ -133,7 +133,8 @@ async function processChange(changeValue: any) {
     // Process status updates
     if (changeValue.statuses && Array.isArray(changeValue.statuses)) {
       for (const status of changeValue.statuses) {
-        console.log(`[Webhook] Status update: ${status.status} for message ${status.id}`);
+        const metaError = status.errors?.[0];
+        console.log(`[Webhook] Status update: ${status.status} for message ${status.id}${metaError ? ` (code ${metaError.code}: ${metaError.title || metaError.message})` : ''}`);
         // Update message status in DB
         if (status.id && status.status) {
           const dbStatus = status.status === 'read' ? 'read' :
@@ -145,6 +146,25 @@ async function processChange(changeValue: any) {
               .from('messages')
               .update({ status: dbStatus })
               .eq('whatsapp_message_id', status.id);
+
+            // Cruza el estado de entrega con los contactos de recordatorios (por wamid).
+            // Se mantiene 'status' como envío (sent) y se registran delivered_at/read_at;
+            // solo 'failed' actualiza status para no romper los contadores del recordatorio.
+            const patch: any = {};
+            if (dbStatus === 'delivered') patch.delivered_at = new Date().toISOString();
+            if (dbStatus === 'read') patch.read_at = new Date().toISOString();
+            if (dbStatus === 'failed') {
+              patch.status = 'failed';
+              patch.error_message = metaError
+                ? `Meta ${metaError.code || ''}: ${metaError.message || metaError.title || JSON.stringify(metaError)}`
+                : 'Meta reportó fallo de entrega';
+            }
+            if (Object.keys(patch).length > 0) {
+              await supabase
+                .from('reminder_contacts')
+                .update(patch)
+                .eq('whatsapp_message_id', status.id);
+            }
           }
         }
       }

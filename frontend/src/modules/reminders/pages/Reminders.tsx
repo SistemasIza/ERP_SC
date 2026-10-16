@@ -52,6 +52,8 @@ interface ReminderDetail extends Reminder {
     status: string;
     error_message: string | null;
     sent_at: string | null;
+    delivered_at?: string | null;
+    read_at?: string | null;
   }>;
   count: number;
   logs: Array<{
@@ -1034,8 +1036,12 @@ export const Reminders = () => {
                       </div>
                     ) : (
                       filteredContacts.map((c) => {
-                        const isSent = c.status === 'sent';
                         const isFailed = c.status === 'failed';
+                        const isRead = !!c.read_at;
+                        const isDelivered = !!c.delivered_at;
+                        const isSent = c.status === 'sent' || isRead || isDelivered;
+                        const deliveryLabel = isFailed ? 'FALLIDO' : isRead ? 'LEÍDO' : isDelivered ? 'ENTREGADO' : c.status === 'sent' ? 'ENVIADO' : 'PENDIENTE';
+                        const deliveryTone = isFailed ? 'red' : isRead ? 'sky' : isSent ? 'emerald' : 'amber';
                         const reply = replies[c.phone];
                         const varsList = c.variables && typeof c.variables === 'object'
                           ? Object.entries(c.variables).filter(([k]) => k !== 'telefono')
@@ -1084,13 +1090,14 @@ export const Reminders = () => {
                             </div>
 
                             {/* Badge estado */}
-                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold justify-self-start ${isSent ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400' :
-                                isFailed ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400' :
-                                  'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold justify-self-start ${deliveryTone === 'red' ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400' :
+                                deliveryTone === 'sky' ? 'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400' :
+                                  deliveryTone === 'emerald' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400' :
+                                    'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'
                               }`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${isSent ? 'bg-emerald-500' : isFailed ? 'bg-red-500' : 'bg-amber-500'
+                              <span className={`w-1.5 h-1.5 rounded-full ${deliveryTone === 'red' ? 'bg-red-500' : deliveryTone === 'sky' ? 'bg-sky-500' : deliveryTone === 'emerald' ? 'bg-emerald-500' : 'bg-amber-500'
                                 }`} />
-                              {isSent ? 'ENTREGADO' : isFailed ? 'FALLIDO' : 'PENDIENTE'}
+                              {deliveryLabel}
                             </span>
 
                             {/* ¿Siguió la conversación? */}
