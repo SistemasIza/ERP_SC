@@ -993,6 +993,78 @@ export class RemindersService {
             })
             .eq('id', contact.id);
 
+          // Registrar en el módulo de Chat: Contacto, Conversación y Mensaje enviado
+          try {
+            const orgId = reminder.organization_id;
+            const contactName = contact.variables?.nombre_completo ||
+                                contact.variables?.nombre ||
+                                contact.variables?.name ||
+                                contact.variables?.cliente ||
+                                'Sin nombre';
+
+            // 1. Upsert contacto
+            const { data: dbContact } = await supabase
+              .from('contacts')
+              .upsert({
+                organization_id: orgId,
+                phone_number: phone,
+                profile_name: contactName,
+                last_active_at: new Date().toISOString(),
+              }, { onConflict: 'organization_id,phone_number' })
+              .select('id')
+              .single();
+
+            if (dbContact?.id) {
+              // 2. Buscar o crear conversación
+              let { data: conv } = await supabase
+                .from('conversations')
+                .select('id')
+                .eq('organization_id', orgId)
+                .eq('contact_id', dbContact.id)
+                .maybeSingle();
+
+              if (!conv) {
+                const insertConv: any = {
+                  organization_id: orgId,
+                  contact_id: dbContact.id,
+                  status: 'open',
+                  last_message_at: new Date().toISOString(),
+                };
+                if (isCloudApi) {
+                  insertConv.platform_type = 'whatsapp';
+                  insertConv.platform_connection_id = connection.id;
+                }
+                const { data: newConv } = await supabase
+                  .from('conversations')
+                  .insert(insertConv)
+                  .select('id')
+                  .single();
+                conv = newConv;
+              } else {
+                await supabase
+                  .from('conversations')
+                  .update({ last_message_at: new Date().toISOString() })
+                  .eq('id', conv.id);
+              }
+
+              // 3. Insertar mensaje en la conversación
+              if (conv?.id) {
+                await supabase.from('messages').insert({
+                  organization_id: orgId,
+                  conversation_id: conv.id,
+                  contact_id: dbContact.id,
+                  direction: 'outbound',
+                  type: 'text',
+                  content: text,
+                  status: 'sent',
+                  whatsapp_message_id: wamid,
+                });
+              }
+            }
+          } catch (chatSyncErr: any) {
+            console.warn(`[Reminders] No se pudo sincronizar chat para ${phone}:`, chatSyncErr?.message || chatSyncErr);
+          }
+
         } catch (err: any) {
           const metaError = err?.response?.data?.error || err?.response?.data;
           const errorMsg = metaError
