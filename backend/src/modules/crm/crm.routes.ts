@@ -76,20 +76,59 @@ router.put('/clients/:id', async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    const { data, error } = await supabase
+    // 1. Intentar actualizar en crm_clients
+    const { data: crmClient, error: crmError } = await supabase
       .from('crm_clients')
       .update(updates)
       .eq('id', id)
       .eq('organization_id', orgId)
       .select()
-      .single();
+      .maybeSingle();
 
-    if (error) {
-      console.error('Error updating CRM client:', error);
+    if (crmClient) {
+      // Sincronizar también con contacts si existe
+      if (updates.phone || updates.name) {
+        await supabase
+          .from('contacts')
+          .update({
+            ...(updates.name ? { profile_name: updates.name } : {}),
+            ...(updates.phone ? { phone_number: updates.phone } : {}),
+          })
+          .eq('organization_id', orgId)
+          .eq('phone_number', updates.phone || crmClient.phone);
+      }
+      return res.json(crmClient);
+    }
+
+    // 2. Si no estaba en crm_clients, verificar y actualizar en contacts (la lista de clientes muestra contacts)
+    const { data: contact, error: contactError } = await supabase
+      .from('contacts')
+      .update({
+        ...(updates.name ? { profile_name: updates.name } : {}),
+        ...(updates.phone ? { phone_number: updates.phone } : {}),
+        last_active_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('organization_id', orgId)
+      .select()
+      .maybeSingle();
+
+    if (contact) {
+      return res.json({
+        id: contact.id,
+        name: contact.profile_name,
+        phone: contact.phone_number,
+        email: updates.email || '',
+        status: updates.status || 'lead',
+      });
+    }
+
+    if (crmError && contactError) {
+      console.error('Error updating CRM client/contact:', crmError || contactError);
       return res.status(500).json({ error: 'Failed to update client' });
     }
 
-    res.json(data);
+    res.json({ success: true });
   } catch (err) {
     console.error('Detailed Error:', err);
     res.status(500).json({ error: 'Failed to update client' });
