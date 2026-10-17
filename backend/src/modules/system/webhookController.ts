@@ -135,6 +135,9 @@ async function processChange(changeValue: any) {
       for (const status of changeValue.statuses) {
         const metaError = status.errors?.[0];
         console.log(`[Webhook] Status update: ${status.status} for message ${status.id}${metaError ? ` (code ${metaError.code}: ${metaError.title || metaError.message})` : ''}`);
+        if (status.status === 'failed' || metaError) {
+          console.log(`[Webhook Status Details]:`, JSON.stringify(status, null, 2));
+        }
         // Update message status in DB
         if (status.id && status.status) {
           const dbStatus = status.status === 'read' ? 'read' :
