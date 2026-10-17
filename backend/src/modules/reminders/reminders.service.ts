@@ -1002,17 +1002,37 @@ export class RemindersService {
                                 contact.variables?.cliente ||
                                 'Sin nombre';
 
-            // 1. Upsert contacto
-            const { data: dbContact } = await supabase
+            // 1. Obtener o crear contacto sin pisar su nombre si ya existe
+            let { data: dbContact } = await supabase
               .from('contacts')
-              .upsert({
-                organization_id: orgId,
-                phone_number: phone,
-                profile_name: contactName,
-                last_active_at: new Date().toISOString(),
-              }, { onConflict: 'organization_id,phone_number' })
-              .select('id')
-              .single();
+              .select('id, profile_name')
+              .eq('organization_id', orgId)
+              .eq('phone_number', phone)
+              .maybeSingle();
+
+            if (!dbContact) {
+              const { data: newContact } = await supabase
+                .from('contacts')
+                .insert({
+                  organization_id: orgId,
+                  phone_number: phone,
+                  profile_name: contactName,
+                  last_active_at: new Date().toISOString(),
+                })
+                .select('id, profile_name')
+                .single();
+              dbContact = newContact;
+            } else {
+              // Si ya existía, solo actualiza la fecha de actividad (y si no tenía nombre válido, se le asigna)
+              const patch: any = { last_active_at: new Date().toISOString() };
+              if ((!dbContact.profile_name || dbContact.profile_name === 'Sin nombre') && contactName !== 'Sin nombre') {
+                patch.profile_name = contactName;
+              }
+              await supabase
+                .from('contacts')
+                .update(patch)
+                .eq('id', dbContact.id);
+            }
 
             if (dbContact?.id) {
               // 2. Buscar o crear conversación
