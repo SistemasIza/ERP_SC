@@ -13,6 +13,9 @@ import { AnimatedButton } from '../../../components/ui/AnimatedButton';
 import { Modal } from '../../../components/ui/Modal';
 import { useNotifications } from '../../../contexts/NotificationContext';
 
+const CONVERSATIONS_PAGE_SIZE = 30;
+const MAX_CONVERSATIONS = 200;
+
 export const Conversations = () => {
   const { addNotification, dismissHandoffAlert } = useNotifications();
   const { id } = useParams();
@@ -31,8 +34,10 @@ export const Conversations = () => {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isChatMenuOpen, setIsChatMenuOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 8;
+  const [hasMoreConversations, setHasMoreConversations] = useState(true);
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
+  const conversationsRef = useRef<any[]>([]);
+  const loadingMoreRef = useRef(false);
 
   // Catalog integration state
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
@@ -112,44 +117,59 @@ export const Conversations = () => {
   };
 
   const fetchConversationsList = async () => {
+    // Lista continua estilo WhatsApp Web: se pide al menos una página y se
+    // conservan las que el usuario ya cargó al hacer scroll.
+    const limit = Math.min(Math.max(CONVERSATIONS_PAGE_SIZE, conversationsRef.current.length), MAX_CONVERSATIONS);
     try {
-      const data = await getConversations();
+      const data = await getConversations({ limit, offset: 0 });
       const conversationsArray = Array.isArray(data) ? data : [];
 
-      const newHash = JSON.stringify(conversationsArray.map((c: any) => ({ id: c._id, last: c.lastMessageAt, unread: c.unreadCount })));
+      const newHash = JSON.stringify(conversationsArray.map((c: any) => ({ id: c._id, last: c.lastMessageAt, unread: c.unreadCount, replied: c.hasReplied })));
       if (newHash === lastConversationsHash.current && lastConversationsHash.current !== '') {
         setLoading(false);
         return;
       }
       lastConversationsHash.current = newHash;
 
-      let filtered = conversationsArray;
-      if (searchTerm) {
-        filtered = filtered.filter(conv => {
-          const realPhone = getRealPhoneNumber(conv.contactId);
-          return (conv.contactId?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (realPhone || '').includes(searchTerm);
-        });
-      }
-
-      if (filterStatus !== 'all') {
-        filtered = filtered.filter(conv => {
-          if (filterStatus === 'unread') return conv.unreadCount > 0;
-          if (filterStatus === 'groups') return conv.contactId?.isGroup === true;
-          return true;
-        });
-      }
-
-      if (filterChannel !== 'all') {
-        filtered = filtered.filter(conv => normalizeChannel(conv.channel) === filterChannel);
-      }
-
-      setConversations(filtered);
+      setConversations(conversationsArray);
+      setHasMoreConversations(conversationsArray.length >= limit && limit < MAX_CONVERSATIONS);
     } catch (err) {
       console.error('Failed to load conversations', err);
       setConversations([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMoreConversations = async () => {
+    if (loadingMoreRef.current || !hasMoreConversations) return;
+    const currentLength = conversationsRef.current.length;
+    const nextLimit = Math.min(currentLength + CONVERSATIONS_PAGE_SIZE, MAX_CONVERSATIONS);
+    if (nextLimit <= currentLength) {
+      setHasMoreConversations(false);
+      return;
+    }
+
+    loadingMoreRef.current = true;
+    setLoadingMoreConversations(true);
+    try {
+      const data = await getConversations({ limit: nextLimit, offset: 0 });
+      const conversationsArray = Array.isArray(data) ? data : [];
+      setConversations(conversationsArray);
+      lastConversationsHash.current = JSON.stringify(conversationsArray.map((c: any) => ({ id: c._id, last: c.lastMessageAt, unread: c.unreadCount, replied: c.hasReplied })));
+      setHasMoreConversations(conversationsArray.length >= nextLimit && nextLimit < MAX_CONVERSATIONS);
+    } catch (err) {
+      console.error('Failed to load more conversations', err);
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMoreConversations(false);
+    }
+  };
+
+  const handleConversationsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+      void loadMoreConversations();
     }
   };
 
@@ -318,10 +338,14 @@ export const Conversations = () => {
   const lastConversationsHash = useRef<string>('');
 
   useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  useEffect(() => {
     fetchConversationsList();
     const interval = setInterval(fetchConversationsList, 8000);
     return () => clearInterval(interval);
-  }, [searchTerm, filterStatus, filterChannel]);
+  }, []);
 
   useEffect(() => {
     if (id && conversations.length > 0 && (!selectedConv || selectedConv._id !== id)) {
@@ -350,11 +374,39 @@ export const Conversations = () => {
       .catch(err => console.error('Error fetching team agents:', err));
   }, []);
 
-  const totalPages = useMemo(() => Math.ceil(conversations.length / itemsPerPage), [conversations.length]);
-  const paginatedConversations = useMemo(() => conversations.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  ), [conversations, currentPage]);
+  // Los filtros se aplican sobre lo ya cargado, sin cortar la lista en páginas.
+  const filteredConversations = useMemo(() => {
+    let filtered = conversations;
+    if (searchTerm) {
+      filtered = filtered.filter(conv => {
+        const realPhone = getRealPhoneNumber(conv.contactId);
+        return (conv.contactId?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (realPhone || '').includes(searchTerm);
+      });
+    }
+    if (filterStatus !== 'all') {
+      filtered = filtered.filter(conv => {
+        if (filterStatus === 'unread') return conv.unreadCount > 0;
+        if (filterStatus === 'groups') return conv.contactId?.isGroup === true;
+        if (filterStatus === 'replied') return conv.hasReplied === true;
+        if (filterStatus === 'not_replied') return conv.hasReplied === false;
+        return true;
+      });
+    }
+    if (filterChannel !== 'all') {
+      filtered = filtered.filter(conv => normalizeChannel(conv.channel) === filterChannel);
+    }
+    return filtered;
+  }, [conversations, searchTerm, filterStatus, filterChannel]);
+
+  // Con un filtro o búsqueda activos se cargan las páginas restantes para que
+  // el resultado no dependa de cuánto se haya hecho scroll (máx. 200 chats).
+  useEffect(() => {
+    const filterActive = filterStatus !== 'all' || !!searchTerm;
+    if (filterActive && !loading && hasMoreConversations) {
+      void loadMoreConversations();
+    }
+  }, [filterStatus, searchTerm, hasMoreConversations, loading, conversations.length]);
 
   const lastMessagesHash = useRef<string>('');
 
@@ -1195,7 +1247,6 @@ export const Conversations = () => {
               <button
                 onClick={() => {
                   setFilterStatus(filterStatus === 'groups' ? 'all' : 'groups');
-                  setCurrentPage(1);
                 }}
                 className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all ${filterStatus === 'groups' ? 'text-accent-500 bg-accent-500/10 shadow-[0_0_10px_rgba(249,115,22,0.2)]' : 'text-gray-400 hover:text-accent-500 hover:bg-accent-500/10'}`}
                 title={filterStatus === 'groups' ? "Viendo solo grupos" : "Filtrar por grupos"}
@@ -1222,7 +1273,23 @@ export const Conversations = () => {
                     ].map(f => (
                       <button
                         key={f.id}
-                        onClick={() => { setFilterStatus(f.id); setCurrentPage(1); }}
+                        onClick={() => { setFilterStatus(f.id); }}
+                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${filterStatus === f.id ? 'text-accent-500 bg-accent-500/5' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5'}`}
+                      >
+                        <f.icon className="w-3 h-3" />
+                        {f.label}
+                      </button>
+                    ))}
+                    <div className="px-3 py-1.5 border-t border-gray-100 dark:border-white/5 mt-1 mb-1">
+                      <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest">Respuesta</p>
+                    </div>
+                    {[
+                      { id: 'replied', label: 'Respondieron', icon: CheckCheck },
+                      { id: 'not_replied', label: 'Sin respuesta', icon: MessageCircle }
+                    ].map(f => (
+                      <button
+                        key={f.id}
+                        onClick={() => { setFilterStatus(f.id); }}
                         className={`w-full flex items-center gap-2 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${filterStatus === f.id ? 'text-accent-500 bg-accent-500/5' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5'}`}
                       >
                         <f.icon className="w-3 h-3" />
@@ -1240,7 +1307,7 @@ export const Conversations = () => {
                     ].map(f => (
                       <button
                         key={f.id}
-                        onClick={() => { setFilterChannel(f.id); setIsFilterOpen(false); setCurrentPage(1); }}
+                        onClick={() => { setFilterChannel(f.id); setIsFilterOpen(false); }}
                         className={`w-full flex items-center gap-2 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all ${filterChannel === f.id ? 'text-accent-500 bg-accent-500/5' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5'}`}
                       >
                         {f.icon ? <f.icon className="w-3 h-3" /> : <span className="w-3 h-3 flex items-center justify-center text-[9px] font-bold">T</span>}
@@ -1265,14 +1332,17 @@ export const Conversations = () => {
               placeholder="Buscar conversación..."
               className="w-full h-10 pl-10 pr-4 bg-gray-50/50 dark:bg-white/5 border border-gray-200 dark:border-white/10 focus:border-accent-500/50 focus:bg-white focus:ring-4 focus:ring-accent-500/10 rounded-xl outline-none text-[13px] text-gray-900 dark:text-white placeholder:text-gray-400 transition-all font-bold shadow-sm"
               value={searchTerm}
-              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              onChange={(e) => { setSearchTerm(e.target.value); }}
             />
           </div>
         </div>
 
-        {/* Chat Items List */}
-        <div className="flex-1 overflow-y-auto px-2 md:px-3 pb-4 space-y-1 custom-scrollbar">
-          {paginatedConversations.map((conv) => {
+        {/* Chat Items List — scroll continuo estilo WhatsApp Web */}
+        <div
+          onScroll={handleConversationsScroll}
+          className="flex-1 overflow-y-auto px-2 md:px-3 pb-4 space-y-1 custom-scrollbar"
+        >
+          {filteredConversations.map((conv) => {
             const isSelected = selectedConv?._id === conv._id;
             const contact = conv.contactId || {};
             const avatar = generateAvatar(contact);
@@ -1365,32 +1435,12 @@ export const Conversations = () => {
               </div>
             );
           })}
+          {loadingMoreConversations && (
+            <div className="flex justify-center py-3">
+              <Loader size="sm" />
+            </div>
+          )}
         </div>
-
-        {/* Pagination Control */}
-        {totalPages > 1 && (
-          <div className="p-4 border-t border-gray-50 dark:border-white/5 flex items-center justify-between">
-            <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-              Pág {currentPage} / {totalPages}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-                className="p-1.5 dark:bg-white/5 rounded-lg text-gray-400 hover:text-accent-500 disabled:opacity-10 transition-all"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-                className="p-1.5 dark:bg-white/5 rounded-lg text-gray-400 hover:text-accent-500 disabled:opacity-10 transition-all"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* --- MAIN PANE --- */}

@@ -181,9 +181,9 @@ export const deleteUsersBulk = async (ids: string[]) => {
   }
 };
 
-export const getConversations = async () => {
+export const getConversations = async (params?: { limit?: number; offset?: number }) => {
   try {
-    const response = await api.get('/conversations');
+    const response = await api.get('/conversations', { params });
     return response.data;
   } catch (error) {
     console.error('Error fetching conversations:', error);

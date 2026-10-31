@@ -39,7 +39,7 @@ router.get('/', async (req, res) => {
     const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
     // 2+3+3.5. Paralelizar la carga de agentes y de mensajes (último + no-leídos)
-    const [agentsResult, messagesResult] = await Promise.all([
+    const [agentsResult, messagesResult, repliedResult] = await Promise.all([
       // Agent names
       (async () => {
         const assignedUserIds = Array.from(new Set(conversations.map((c: any) => c.assigned_to).filter(Boolean)));
@@ -89,10 +89,44 @@ router.get('/', async (req, res) => {
         }
         return { lastMsgMap, unreadMap };
       })(),
+
+      // 3.6. ¿El contacto respondió alguna vez? Se marca la conversación si
+      // tiene al menos un mensaje entrante, sin importar su antigüedad.
+      (async () => {
+        const replied = new Set<string>();
+        const { data: inboundRows } = await supabase
+          .from('messages')
+          .select('conversation_id')
+          .in('conversation_id', convIds)
+          .eq('direction', 'inbound')
+          .limit(2000);
+        if (inboundRows) {
+          inboundRows.forEach((row: any) => replied.add(row.conversation_id));
+        }
+
+        const missing = convIds.filter((cid: string) => !replied.has(cid));
+        if (missing.length > 0) {
+          const checks = await Promise.all(missing.map(async (cid: string) => {
+            const { data } = await supabase
+              .from('messages')
+              .select('id')
+              .eq('conversation_id', cid)
+              .eq('direction', 'inbound')
+              .limit(1)
+              .maybeSingle();
+            return data ? cid : null;
+          }));
+          checks.forEach((cid) => {
+            if (cid) replied.add(cid);
+          });
+        }
+        return replied;
+      })(),
     ]);
 
     const agentMap = agentsResult;
     const { lastMsgMap, unreadMap } = messagesResult;
+    const repliedSet = repliedResult;
 
     // La consulta masiva se limita a 7 días para no descargar todo el historial.
     // Las conversaciones cuyo último mensaje es más antiguo quedarían sin vista
@@ -141,6 +175,7 @@ router.get('/', async (req, res) => {
         },
         lastMessageAt: conv.last_message_at,
         lastMessageContent: lastMsgMap.get(conv.id) || 'Sin mensajes',
+        hasReplied: repliedSet.has(conv.id),
         channel: conv.platform_type || 'whatsapp',
         unreadCount: unreadMap.get(conv.id) || 0,
         status: conv.status,
