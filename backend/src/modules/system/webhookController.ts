@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { handleIncomingMessage } from '../bots/engine/flow-core';
 import { supabase } from '../../core/config/supabase';
 import WhatsAppService from '../integrations/whatsappService';
+import { persistCloudMediaMessage, buildLocationContent, isMediaMessageType } from './mediaService';
 
 /**
  * Validates X-Hub-Signature-256 HMAC signature from Meta.
@@ -145,28 +146,44 @@ async function processChange(changeValue: any) {
                           status.status === 'sent' ? 'sent' :
                           status.status === 'failed' ? 'failed' : null;
           if (dbStatus) {
-            await supabase
+            // Los estados solo avanzan (sent → delivered → read). Un reintento
+            // tardío de Meta con un estado anterior no debe quitar el doble check azul.
+            const { data: existing } = await supabase
               .from('messages')
-              .update({ status: dbStatus })
-              .eq('whatsapp_message_id', status.id);
+              .select('status')
+              .eq('whatsapp_message_id', status.id)
+              .limit(1)
+              .maybeSingle();
 
-            // Cruza el estado de entrega con los contactos de recordatorios (por wamid).
-            // Se mantiene 'status' como envío (sent) y se registran delivered_at/read_at;
-            // solo 'failed' actualiza status para no romper los contadores del recordatorio.
-            const patch: any = {};
-            if (dbStatus === 'delivered') patch.delivered_at = new Date().toISOString();
-            if (dbStatus === 'read') patch.read_at = new Date().toISOString();
-            if (dbStatus === 'failed') {
-              patch.status = 'failed';
-              patch.error_message = metaError
-                ? `Meta ${metaError.code || ''}: ${metaError.message || metaError.title || JSON.stringify(metaError)}`
-                : 'Meta reportó fallo de entrega';
-            }
-            if (Object.keys(patch).length > 0) {
+            const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3 };
+            const currentStatus = existing?.status as string | undefined;
+            const isRegression = !!currentStatus && currentStatus !== 'failed' && dbStatus !== 'failed'
+              && (rank[dbStatus] || 0) < (rank[currentStatus] || 0);
+
+            if (!isRegression) {
               await supabase
-                .from('reminder_contacts')
-                .update(patch)
+                .from('messages')
+                .update({ status: dbStatus })
                 .eq('whatsapp_message_id', status.id);
+
+              // Cruza el estado de entrega con los contactos de recordatorios (por wamid).
+              // Se mantiene 'status' como envío (sent) y se registran delivered_at/read_at;
+              // solo 'failed' actualiza status para no romper los contadores del recordatorio.
+              const patch: any = {};
+              if (dbStatus === 'delivered') patch.delivered_at = new Date().toISOString();
+              if (dbStatus === 'read') patch.read_at = new Date().toISOString();
+              if (dbStatus === 'failed') {
+                patch.status = 'failed';
+                patch.error_message = metaError
+                  ? `Meta ${metaError.code || ''}: ${metaError.message || metaError.title || JSON.stringify(metaError)}`
+                  : 'Meta reportó fallo de entrega';
+              }
+              if (Object.keys(patch).length > 0) {
+                await supabase
+                  .from('reminder_contacts')
+                  .update(patch)
+                  .eq('whatsapp_message_id', status.id);
+              }
             }
           }
         }
@@ -305,12 +322,13 @@ async function processIncomingMessage(message: any, changeValue: any) {
 
     let connectionMethod = organization.whatsapp_connection_method || 'qr';
     let platformConnectionId: string | null = null;
+    let cloudAccessToken: string | null = null;
 
     // Detect Cloud API from platform_connections
     {
       const { data: platformConn } = await supabase
         .from('platform_connections')
-        .select('id')
+        .select('id, config, platform_account_id')
         .eq('organization_id', organization.id)
         .eq('platform_type', 'whatsapp')
         .eq('platform_account_id', receivingPhoneId)
@@ -319,6 +337,7 @@ async function processIncomingMessage(message: any, changeValue: any) {
       if (platformConn) {
         connectionMethod = 'cloud';
         platformConnectionId = platformConn.id;
+        cloudAccessToken = platformConn.config?.access_token || null;
       }
     }
 
@@ -382,6 +401,30 @@ async function processIncomingMessage(message: any, changeValue: any) {
     else if (message.type === 'audio') messageType = 'audio';
     else if (message.type === 'location') messageType = 'location';
     else if (message.type === 'contact') messageType = 'contact';
+    // messages.type no admite 'sticker' en el CHECK actual: se guarda como
+    // imagen y el marcador real viaja en content.type para la UI.
+    else if (message.type === 'sticker') messageType = 'image';
+
+    // La URL temporal que entrega Meta caduca en minutos y el webhook solo trae
+    // el media_id, así que se descarga el archivo y se guarda en Storage para
+    // que el chat pueda mostrarlo ahora y en el historial.
+    let storedContent: any = messageContent;
+    const mediaAccessToken = cloudAccessToken || organization.whatsapp_access_token;
+
+    if (isMediaMessageType(messageType) && mediaAccessToken) {
+      try {
+        const media = await persistCloudMediaMessage(message, {
+          organizationId: organization.id,
+          accessToken: mediaAccessToken,
+          messageId: message.id || `media-${Date.now()}`,
+        });
+        if (media) storedContent = media;
+      } catch (mediaError: any) {
+        console.error('[Webhook] No se pudo persistir el media:', mediaError?.message || mediaError);
+      }
+    } else if (messageType === 'location') {
+      storedContent = buildLocationContent(message) || messageContent;
+    }
 
     await supabase.from('messages').insert({
       organization_id: organization.id,
@@ -389,7 +432,7 @@ async function processIncomingMessage(message: any, changeValue: any) {
       contact_id: contact.id,
       direction: 'inbound',
       type: messageType,
-      content: messageContent,
+      content: typeof storedContent === 'string' ? storedContent : JSON.stringify(storedContent),
       whatsapp_message_id: message.id
     });
 

@@ -3,6 +3,7 @@ import { supabase } from '../../core/config/supabase';
 import { multiWhatsAppService } from '../integrations/multiWhatsAppService';
 import { whatsappCloudService } from '../integrations/platform/whatsappCloudService';
 import { auditLogService } from '../audit/auditLogService';
+import { uploadDataUrlToChatMedia } from '../system/mediaService';
 
 const router = express.Router();
 
@@ -92,6 +93,29 @@ router.get('/', async (req, res) => {
 
     const agentMap = agentsResult;
     const { lastMsgMap, unreadMap } = messagesResult;
+
+    // La consulta masiva se limita a 7 días para no descargar todo el historial.
+    // Las conversaciones cuyo último mensaje es más antiguo quedarían sin vista
+    // previa ("Sin mensajes"), así que se resuelve su último mensaje aparte.
+    const missingLastMsgIds = conversations
+      .map((c: any) => c.id)
+      .filter((cid: string) => !lastMsgMap.has(cid));
+
+    if (missingLastMsgIds.length > 0) {
+      const fallbacks = await Promise.all(missingLastMsgIds.map(async (cid: string) => {
+        const { data } = await supabase
+          .from('messages')
+          .select('conversation_id, content')
+          .eq('conversation_id', cid)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        return data;
+      }));
+      for (const row of fallbacks) {
+        if (row) lastMsgMap.set(row.conversation_id, row.content);
+      }
+    }
 
     // 4. Format response
     const formattedConversations = conversations.map((conv: any) => {
@@ -355,6 +379,7 @@ router.post('/:id/send', async (req, res) => {
           jid: contactJid,
           type: mediaType || 'image',
           caption: text || caption || '',
+          filename: req.body.filename,
         });
       } else {
         sendResult = await adapter.sendTextMessage(correctedPhone, text.trim(), { jid: contactJid });
@@ -372,6 +397,23 @@ router.post('/:id/send', async (req, res) => {
       (sendResult as any)?.id ||
       (sendResult as any)?.key?.id ||
       null;
+
+    // El navegador envía el archivo como base64; guardarlo tal cual en la BD
+    // infla cada fila varios MB. Se sube a chat-media y se persiste la URL
+    // pública, que sirve tanto para el chat como para el historial.
+    let storedMediaUrl = mediaUrl;
+    if (mediaUrl && isBase64Media) {
+      try {
+        storedMediaUrl = await uploadDataUrlToChatMedia(mediaUrl, {
+          organizationId: orgId,
+          keyBase: msgId || `out-${Date.now()}`,
+          filename: req.body.filename,
+        });
+      } catch (uploadError: any) {
+        console.warn('[Conversations] No se pudo subir el adjunto a Storage:', uploadError?.message || uploadError);
+      }
+    }
+
     const { data: msg } = await supabase
       .from('messages')
       .insert({
@@ -383,7 +425,7 @@ router.post('/:id/send', async (req, res) => {
         whatsapp_message_id: msgId,
         content: mediaUrl
           ? JSON.stringify({
-              url: mediaUrl,
+              url: storedMediaUrl,
               type: mediaType || 'image',
               filename: req.body.filename || 'adjunto',
               caption: (isBase64Media ? req.body.caption : text) || '',
@@ -421,7 +463,7 @@ router.post('/:id/send', async (req, res) => {
     res.json({
       _id: savedMessage?.id,
       direction: 'outbound',
-      content: mediaUrl ? { url: mediaUrl, caption: text } : (text || '').trim(),
+      content: mediaUrl ? { url: storedMediaUrl, type: mediaType || 'image', filename: req.body.filename, caption: text } : (text || '').trim(),
       createdAt: savedMessage?.created_at,
       type: mediaUrl ? (mediaType || 'image') : 'text',
       status: 'sent'

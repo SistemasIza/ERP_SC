@@ -166,7 +166,9 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '10mb' }));
+// 25mb: los adjuntos viajan como base64 (≈33% más que el binario) y WhatsApp
+// permite media de hasta 16 MB.
+app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Prevention of ERR_HTTP_HEADERS_SENT after timeout

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getConversations, getConversationMessages, deleteConversation, deleteUser, getCatalogs, getTeamUsers, assignAgentToConversation } from '../../../services/api';
 import api from '../../../services/api';
 import {
-  Check, CheckCheck, Send, Search, Filter, Users, MoreVertical, Smile, Paperclip, Mic, Star, MessageCircle, Trash2, ChevronLeft, ChevronRight, ChevronDown, Store, Package, X, Bell, BellOff, Shield, Plus, Cloud, QrCode, Bot, User
+  Check, CheckCheck, Send, Search, Filter, Users, MoreVertical, Smile, Paperclip, Mic, Star, MessageCircle, Trash2, ChevronLeft, ChevronRight, ChevronDown, Store, Package, X, Bell, BellOff, Shield, Plus, Cloud, QrCode, Bot, User, MapPin, Download, Sticker
 } from 'lucide-react';
 import { FaWhatsapp, FaTelegram, FaInstagram, FaFacebookMessenger, FaTiktok } from 'react-icons/fa';
 import { PageLoader } from '../../../components/layout/PageLoader';
@@ -571,27 +571,32 @@ export const Conversations = () => {
 
   const MessageStatus = ({ status }: { status?: string }) => {
     const statusColors: Record<string, string> = {
-      sending: 'text-white/50 dark:text-black/40',
-      sent: 'text-white/70 dark:text-black/60',
-      delivered: 'text-white/70 dark:text-black/60',
-      read: 'text-blue-200 dark:text-blue-400',
-      error: 'text-red-300 dark:text-red-400',
+      sending: 'text-gray-300 dark:text-gray-600',
+      sent: 'text-gray-400 dark:text-gray-500',
+      delivered: 'text-gray-400 dark:text-gray-500',
+      read: 'text-[#53bdeb]',
+      error: 'text-red-500 dark:text-red-400',
     };
     const color = statusColors[status || 'sent'] || statusColors.sent;
+    const label = status === 'read' ? 'Leído'
+      : status === 'delivered' ? 'Entregado'
+      : status === 'error' ? 'Error'
+      : status === 'sending' ? 'Enviando'
+      : 'Enviado';
 
     if (status === 'error') {
-      return <span className={`text-[9px] font-bold ${color}`}>Error</span>;
+      return <span title={label} className={`text-[9px] font-bold ${color}`}>Error</span>;
     }
     if (status === 'sending') {
-      return <span className={`text-[9px] font-bold ${color}`}>...</span>;
+      return <span title={label} className={`text-[9px] font-bold ${color}`}>...</span>;
     }
     if (status === 'read') {
-      return <CheckCheck className={`w-4 h-4 ${color}`} />;
+      return <span title={label} className="inline-flex"><CheckCheck className={`w-4 h-4 ${color}`} aria-label={label} /></span>;
     }
     if (status === 'delivered') {
-      return <CheckCheck className={`w-4 h-4 ${color}`} />;
+      return <span title={label} className="inline-flex"><CheckCheck className={`w-4 h-4 ${color}`} aria-label={label} /></span>;
     }
-    return <Check className={`w-3.5 h-3.5 ${color}`} />;
+    return <span title={label} className="inline-flex"><Check className={`w-3.5 h-3.5 ${color}`} aria-label={label} /></span>;
   };
 
   const handleAttachFile = () => {
@@ -603,8 +608,10 @@ export const Conversations = () => {
     if (!file || !selectedConv || sending) return;
 
     const localUrl = URL.createObjectURL(file);
-    const isImage = file.type.startsWith('image/');
-    const mediaType = isImage ? 'image' : 'document';
+    const mediaType = file.type.startsWith('image/') ? 'image'
+      : file.type.startsWith('video/') ? 'video'
+      : file.type.startsWith('audio/') ? 'audio'
+      : 'document';
 
     setSending(true);
 
@@ -748,28 +755,129 @@ export const Conversations = () => {
     }
   };
 
-  const getMessageMedia = (content: any): { url: string; type: 'image' | 'video' | 'document' | 'audio' } | null => {
+  type MediaKind = 'image' | 'video' | 'audio' | 'document' | 'sticker';
+
+  const parseContentObject = (content: any): any => {
     if (!content) return null;
+    if (typeof content !== 'string') return content;
     try {
-      const parsed = typeof content === 'string' ? JSON.parse(content) : content;
-      const media =
-        parsed.imageMessage ||
-        parsed.videoMessage ||
-        parsed.documentMessage ||
-        parsed.media;
-      if (media?.url) return { url: media.url, type: media.mimetype?.startsWith('video') ? 'video' : media.mimetype?.startsWith('image') ? 'image' : media.mimetype?.startsWith('audio') ? 'audio' : 'document' };
-      if (parsed.url) {
-        if (parsed.type === 'audio') return { url: parsed.url, type: 'audio' };
-        return { url: parsed.url, type: 'image' };
-      }
-      if (typeof content === 'string' && (content.match(/https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)/i))) {
-        const match = content.match(/https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)/i);
-        return match ? { url: match[0], type: 'image' } : null;
-      }
-      return null;
+      let parsed = JSON.parse(content);
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+      return parsed;
     } catch {
       return null;
     }
+  };
+
+  const mediaKindFrom = (mimeType?: string, hint?: string): MediaKind => {
+    const mime = (mimeType || '').toLowerCase();
+    if ((hint || '').toLowerCase() === 'sticker') return 'sticker';
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime.startsWith('application/') || mime.startsWith('text/')) return 'document';
+    const h = (hint || '').toLowerCase();
+    if (h === 'image' || h === 'video' || h === 'audio' || h === 'document' || h === 'sticker') return h;
+    if (h === 'media') return 'image';
+    return 'image';
+  };
+
+  const isStickerMessage = (content: any): boolean => {
+    const parsed = parseContentObject(content);
+    if (!parsed || typeof parsed !== 'object') return false;
+    if (parsed.type === 'sticker' || parsed.sticker || parsed.stickerMessage) return true;
+    return parsed.media?.type === 'sticker';
+  };
+
+  // Vista previa del último mensaje en la lista: si el mensaje no tiene texto
+  // (solo media), se muestra una etiqueta en lugar de dejarlo vacío.
+  const getConversationPreview = (content: any): string => {
+    const text = parseMessage(content);
+    const parsed = parseContentObject(content);
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.type === 'location' || parsed.location) return 'Ubicación';
+      if (parsed.type === 'contact' || parsed.contacts) return 'Contacto';
+      if (text) return text;
+      const hasMedia = parsed.url || parsed.media || parsed.imageMessage || parsed.videoMessage
+        || parsed.audioMessage || parsed.documentMessage || parsed.stickerMessage || parsed.sticker;
+      if (!hasMedia) return text;
+      if (isStickerMessage(parsed)) return 'Sticker';
+      const kind = mediaKindFrom(parsed.mime_type || parsed.mimeType, parsed.media?.type || parsed.type);
+      if (kind === 'video') return 'Video';
+      if (kind === 'audio') return 'Audio';
+      if (kind === 'document') return parsed.filename ? `Documento: ${parsed.filename}` : 'Documento';
+      return 'Foto';
+    }
+    return text;
+  };
+
+  const getMessageMedia = (content: any): { url: string; type: MediaKind; filename?: string; caption?: string } | null => {
+    const parsed = parseContentObject(content);
+    if (!parsed || typeof parsed !== 'object') {
+      if (typeof content === 'string') {
+        const match = content.match(/https?:\/\/[^\s"']+\.(jpg|jpeg|png|gif|webp|mp4|ogg|mp3|pdf)/i);
+        if (match) {
+          const ext = match[1].toLowerCase();
+          const type: MediaKind = ['mp4'].includes(ext) ? 'video' : ['ogg', 'mp3'].includes(ext) ? 'audio' : ['pdf'].includes(ext) ? 'document' : 'image';
+          return { url: match[0], type };
+        }
+      }
+      return null;
+    }
+
+    const candidates: Array<[any, string | undefined]> = [
+      [parsed.media, parsed.media?.type || parsed.type],
+      [parsed.imageMessage, 'image'],
+      [parsed.videoMessage, 'video'],
+      [parsed.audioMessage, 'audio'],
+      [parsed.documentMessage, 'document'],
+      [parsed.image, 'image'],
+      [parsed.video, 'video'],
+      [parsed.audio, 'audio'],
+      [parsed.document, 'document'],
+      [parsed.raw?.imageMessage, 'image'],
+      [parsed.raw?.videoMessage, 'video'],
+      [parsed.raw?.audioMessage, 'audio'],
+      [parsed.raw?.documentMessage, 'document'],
+      [parsed.raw?.image, 'image'],
+      [parsed.raw?.video, 'video'],
+      [parsed.raw?.audio, 'audio'],
+      [parsed.raw?.document, 'document'],
+    ];
+
+    for (const [media, hint] of candidates) {
+      const url = media?.url || media?.link;
+      if (typeof url === 'string' && url) {
+        return {
+          url,
+          type: mediaKindFrom(media?.mimetype || media?.mime_type, hint),
+          filename: media?.filename || media?.fileName || parsed.filename,
+          caption: media?.caption || parsed.caption,
+        };
+      }
+    }
+
+    if (typeof parsed.url === 'string' && parsed.url) {
+      return {
+        url: parsed.url,
+        type: mediaKindFrom(parsed.mime_type || parsed.mimetype, parsed.type),
+        filename: parsed.filename || parsed.fileName,
+        caption: parsed.caption,
+      };
+    }
+
+    return null;
+  };
+
+  const getMessageLocation = (content: any): { latitude: number; longitude: number; name?: string; address?: string } | null => {
+    const parsed = parseContentObject(content);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const loc = parsed.location || parsed.locationMessage || parsed.raw?.location || parsed.raw?.locationMessage;
+    if (!loc) return null;
+    const latitude = loc.latitude ?? loc.degreesLatitude;
+    const longitude = loc.longitude ?? loc.degreesLongitude;
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') return null;
+    return { latitude, longitude, name: loc.name, address: loc.address };
   };
 
   const parseButtons = (content: any): { id: string; text: string }[] => {
@@ -1235,7 +1343,7 @@ export const Conversations = () => {
 
                   <div className="flex justify-between items-center">
                     <p className={`text-[12px] truncate w-full pr-4 ${isSelected ? 'text-gray-600 dark:text-gray-400' : 'text-gray-400 dark:text-gray-500'}`}>
-                      {parseMessage(conv.lastMessageContent) || 'Sin mensajes'}
+                      {getConversationPreview(conv.lastMessageContent) || 'Sin mensajes'}
                     </p>
 
                     <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1558,6 +1666,11 @@ export const Conversations = () => {
                 const isMe = m.direction === 'outbound';
                 const body = parseMessage(m.content);
                 const media = getMessageMedia(m.content);
+                const sticker = isStickerMessage(m.content);
+                const location = getMessageLocation(m.content);
+                const unavailableMedia = !media && !sticker && !location && ['image', 'video', 'audio', 'document'].includes(m.type)
+                  ? (m.type === 'audio' ? 'Audio no disponible' : m.type === 'video' ? 'Video no disponible' : m.type === 'image' ? 'Imagen no disponible' : 'Archivo no disponible')
+                  : null;
                 const isCurrentSearch = chatSearchResults[chatSearchIndex]?.i === msgIdx;
                 const searchKey = chatSearchTerm || '';
 
@@ -1576,7 +1689,7 @@ export const Conversations = () => {
                   const parts = text.split(new RegExp(`(${chatSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
                   const html = parts.map(part =>
                     part.toLowerCase() === chatSearchTerm.toLowerCase()
-                      ? `<mark class="bg-amber-300 dark:bg-amber-600/60 text-inherit rounded-sm px-0.5">${part}</mark>`
+                      ? `<mark class="bg-amber-300 text-gray-900 rounded-sm px-0.5">${part}</mark>`
                       : part
                   ).join('');
                   return html
@@ -1592,35 +1705,63 @@ export const Conversations = () => {
                     className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} transition-all duration-300 ${isCurrentSearch ? 'ring-2 ring-amber-400 dark:ring-amber-500 rounded-2xl scale-[1.02]' : ''}`}>
                     <div className={`flex items-end gap-1.5 max-w-[90%] md:max-w-[80%] lg:max-w-[70%] xl:max-w-[60%] ${isMe ? 'animate-[slideInRight_0.3s_ease-out]' : 'animate-[slideInLeft_0.3s_ease-out]'}`}>
                       {!isMe && (
-                        <div className="w-7 h-7 rounded-full bg-white dark:bg-white/10 flex items-center justify-center flex-shrink-0 mb-0.5 overflow-hidden shadow-sm border border-gray-100 dark:border-white/5">
-                          {selectedConv.contactId?.isGroup ? <Users className="w-3.5 h-3.5 text-gray-400" /> : <span className="text-xs font-bold text-gray-500 dark:text-gray-400">{generateAvatar(selectedConv.contactId).content}</span>}
+                        <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mb-0.5 overflow-hidden shadow-sm border border-white/30 dark:border-white/10 bg-gradient-to-br from-accent-500 to-accent-600">
+                          {selectedConv.contactId?.isGroup ? <Users className="w-3.5 h-3.5 text-white/90" /> : <span className="text-xs font-bold text-white">{generateAvatar(selectedConv.contactId).content}</span>}
                         </div>
                       )}
-                      <div className={`relative px-4 py-2.5 rounded-[1.25rem] shadow-sm transition-all duration-200 ${isMe
-                        ? 'bg-gradient-to-br from-accent-500 to-accent-600 text-white rounded-br-[4px] shadow-accent-500/10 border border-accent-400/20'
-                        : 'bg-white dark:bg-[#202020] text-gray-900 dark:text-gray-100 rounded-bl-[4px] border border-gray-100/50 dark:border-white/5'
+                      <div className={`relative px-4 py-2.5 rounded-[1.25rem] transition-all duration-200 ${isMe
+                        ? 'bg-white dark:bg-[#202020] text-gray-900 dark:text-gray-100 rounded-br-[4px] border border-gray-200/70 dark:border-white/10 shadow-sm'
+                        : 'bg-gradient-to-br from-accent-500 to-accent-600 text-white rounded-bl-[4px] border border-white/15 shadow-md shadow-accent-500/20'
                         }`}>
-                        {media ? (
+                        {sticker ? (
+                          <div className={`-mx-5 -mt-3 mb-2 rounded-t-2xl px-4 py-3 flex items-center gap-3 ${isMe ? 'bg-gray-50 dark:bg-white/5' : 'bg-white/15'}`}>
+                            <Sticker className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-accent-500' : 'text-white'}`} />
+                            <span className={`text-xs font-semibold ${isMe ? 'text-gray-600 dark:text-gray-300' : 'text-white'}`}>Sticker</span>
+                          </div>
+                        ) : media ? (
                           <div className="-mx-5 -mt-3 mb-2 rounded-t-2xl overflow-hidden">
                             {media.type === 'image' ? (
                               <img src={media.url} alt="Imagen" className="w-full h-auto object-contain bg-black/5" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                             ) : media.type === 'video' ? (
                               <video src={media.url} controls className="w-full max-h-64" />
                             ) : media.type === 'audio' ? (
-                              <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-white/5">
-                                <Mic className="w-5 h-5 text-accent-500" />
+                              <div className={`flex items-center gap-3 px-4 py-3 ${isMe ? 'bg-gray-50 dark:bg-white/5' : 'bg-white/15'}`}>
+                                <Mic className={`w-5 h-5 ${isMe ? 'text-accent-500' : 'text-white'}`} />
                                 <audio src={media.url} controls className="flex-1 h-8" />
                               </div>
                             ) : (
-                              <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-white/5">
-                                <Paperclip className="w-5 h-5 text-gray-400" />
-                                <span className="text-xs font-semibold text-gray-500 truncate">Documento</span>
-                              </div>
+                              <a href={media.url} target="_blank" rel="noreferrer" download={media.filename || undefined}
+                                className={`flex items-center gap-3 px-4 py-3 transition-colors ${isMe ? 'bg-gray-50 dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10' : 'bg-white/15 hover:bg-white/20'}`}>
+                                <Paperclip className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-gray-400' : 'text-white/80'}`} />
+                                <span className={`text-xs font-semibold truncate flex-1 ${isMe ? 'text-gray-600 dark:text-gray-300' : 'text-white'}`}>{media.filename || 'Documento'}</span>
+                                <Download className={`w-4 h-4 flex-shrink-0 ${isMe ? 'text-gray-400' : 'text-white/70'}`} />
+                              </a>
                             )}
                           </div>
+                        ) : unavailableMedia ? (
+                          <div className={`-mx-5 -mt-3 mb-2 rounded-t-2xl px-4 py-3 flex items-center gap-3 ${isMe ? 'bg-gray-50 dark:bg-white/5' : 'bg-white/15'}`}>
+                            {unavailableMedia === 'Audio no disponible'
+                              ? <Mic className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-gray-400' : 'text-white/80'}`} />
+                              : <Paperclip className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-gray-400' : 'text-white/80'}`} />}
+                            <span className={`text-xs font-semibold ${isMe ? 'text-gray-500 dark:text-gray-400' : 'text-white'}`}>{unavailableMedia}</span>
+                          </div>
+                        ) : null}
+                        {location ? (
+                          <a href={`https://www.google.com/maps/search/?api=1&query=${location.latitude},${location.longitude}`} target="_blank" rel="noreferrer"
+                            className={`-mx-5 -mt-3 mb-2 flex items-center gap-3 rounded-t-2xl px-4 py-3 transition-colors ${isMe ? 'bg-gray-50 dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10' : 'bg-white/15 hover:bg-white/20'}`}>
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isMe ? 'bg-accent-500/15 text-accent-600 dark:text-accent-400' : 'bg-white/20 text-white'}`}>
+                              <MapPin className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-bold truncate">{location.name || 'Ubicación compartida'}</p>
+                              <p className={`text-[10px] truncate ${isMe ? 'text-gray-500 dark:text-gray-400' : 'text-white/80'}`}>
+                                {location.address || `${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`}
+                              </p>
+                            </div>
+                          </a>
                         ) : null}
                         {body && <p className="text-[13px] font-medium leading-relaxed whitespace-pre-wrap tracking-wide" dangerouslySetInnerHTML={{ __html: highlightText(body) }} />}
-                        <div className={`flex justify-end items-center gap-1.5 ${body || media ? 'mt-2' : ''} ${isMe ? 'text-white/70 dark:text-black/60' : 'text-gray-400 dark:text-gray-500'}`}>
+                        <div className={`flex justify-end items-center gap-1.5 ${body || media || sticker || location || unavailableMedia ? 'mt-2' : ''} ${isMe ? 'text-gray-400 dark:text-gray-500' : 'text-white/70'}`}>
                           <span className="text-[9px] font-black uppercase tracking-widest">
                             {formatTime(m.createdAt)}
                           </span>

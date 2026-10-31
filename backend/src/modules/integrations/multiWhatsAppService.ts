@@ -2,6 +2,7 @@ import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
+  downloadMediaMessage,
   proto
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
@@ -12,6 +13,8 @@ import { supabase } from '../../core/config/supabase';
 import { handleIncomingMessage } from '../bots/engine/flow-core';
 import { sessionPersistenceService } from './sessionPersistenceService';
 import { messageQueueService } from '../../shared/services/messageQueueService';
+import { uploadChatMedia } from '../system/mediaService';
+import { convertToOggOpus } from './platform/whatsappCloudService';
 import { io } from '../../api';
 
 interface WhatsAppConnection {
@@ -354,6 +357,29 @@ export class MultiWhatsAppService {
         return;
       }
 
+      // Baileys entrega el media cifrado dentro del mensaje, sin URL pública:
+      // se descarga con la sesión activa y se guarda en Storage para el chat.
+      if (formattedMessage.type === 'media' || formattedMessage.type === 'sticker') {
+        try {
+          const buffer = await downloadMediaMessage(msg as any, 'buffer', {}, {
+            logger: this.logger,
+            reuploadRequest: connection.socket?.updateMediaMessage,
+          }) as Buffer;
+          const mimeType: string = formattedMessage.media.mime_type || 'application/octet-stream';
+          const url = await uploadChatMedia({
+            buffer,
+            mimeType,
+            organizationId: connection.organizationId,
+            keyBase: msg.key?.id || `baileys-${Date.now()}`,
+            filename: formattedMessage.media.filename,
+          });
+          formattedMessage.media.url = url;
+          formattedMessage.media.mime_type = mimeType;
+        } catch (mediaError: any) {
+          console.error('[MultiWhatsApp] No se pudo descargar el media:', mediaError?.message || mediaError);
+        }
+      }
+
       // Save to history
       const profileName = msg.pushName || '';
       const { contact, conversation } = await this.saveMessageData(formattedMessage, senderPhone, connection, null, profileName);
@@ -491,7 +517,6 @@ export class MultiWhatsAppService {
     const isControlMessage = !!(
       msg.message?.protocolMessage ||
       msg.message?.senderKeyDistributionMessage ||
-      msg.message?.stickerMessage || // Optional: ignore stickers if not handled
       msg.message?.reactionMessage
     );
 
@@ -548,11 +573,27 @@ export class MultiWhatsAppService {
         }
       };
     } else if (msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.audioMessage || msg.message?.documentMessage) {
+      const image = msg.message?.imageMessage;
+      const video = msg.message?.videoMessage;
+      const audio = msg.message?.audioMessage;
+      const document = msg.message?.documentMessage;
       formattedMessage.type = 'media';
       formattedMessage.media = {
-        type: msg.message?.imageMessage ? 'image' :
-          msg.message?.videoMessage ? 'video' :
-            msg.message?.audioMessage ? 'audio' : 'document'
+        type: image ? 'image' : video ? 'video' : audio ? 'audio' : 'document',
+        mime_type: image?.mimetype || video?.mimetype || audio?.mimetype || document?.mimetype,
+        filename: document?.fileName,
+      };
+    } else if (msg.message?.stickerMessage) {
+      formattedMessage.type = 'sticker';
+      formattedMessage.media = { type: 'sticker', mime_type: 'image/webp' };
+    } else if (msg.message?.locationMessage || msg.message?.liveLocationMessage) {
+      const loc: any = msg.message?.locationMessage || msg.message?.liveLocationMessage;
+      formattedMessage.type = 'location';
+      formattedMessage.location = {
+        latitude: loc?.degreesLatitude,
+        longitude: loc?.degreesLongitude,
+        name: loc?.name,
+        address: loc?.address,
       };
     } else {
       // If we reach here and it's not a known type, it's likely a technical message we don't want
@@ -661,12 +702,18 @@ export class MultiWhatsAppService {
       conversation = newConversation;
     }
 
+    // messages.type solo admite text/image/audio/video/document/location/contact;
+    // el motor de flujos usa 'media' como categoría genérica y el tipo real va en media.type.
+    const dbType = message.type === 'media'
+      ? (message.media?.type || 'document')
+      : message.type === 'sticker' ? 'image' : message.type;
+
     await supabase.from('messages').insert({
       organization_id: connection.organizationId,
       conversation_id: conversation.id,
       contact_id: contact.id,
       direction: 'inbound',
-      type: message.type,
+      type: dbType,
       content: JSON.stringify(message),
       whatsapp_message_id: message.id
     });
@@ -750,11 +797,28 @@ export class MultiWhatsAppService {
         const ext = url.split('.').pop()?.toLowerCase() || '';
         const type = options?.type || (['png', 'jpg', 'jpeg'].includes(ext) ? 'image' : 'document');
 
-        if (type === 'image') {
-          return await connection.socket?.sendMessage(jid, { image: { url }, caption: options?.caption });
+        // El panel envía los adjuntos como data URL (base64); Baileys espera
+        // un Buffer o una URL real, así que se decodifica antes de enviar.
+        const dataMatch = typeof url === 'string' ? url.match(/^data:([^;,]+)(?:;[^,]*)*;base64,(.+)$/s) : null;
+        const media = dataMatch ? Buffer.from(dataMatch[2], 'base64') : { url };
+        const mediaKey = type === 'image' ? 'image' : type === 'video' ? 'video' : type === 'audio' ? 'audio' : 'document';
+
+        const payload: any = { [mediaKey]: media };
+        if (mediaKey === 'audio') {
+          // WhatsApp solo reproduce notas de voz en ogg/opus; el navegador graba webm.
+          payload.mimetype = 'audio/ogg; codecs=opus';
+          if (Buffer.isBuffer(media)) {
+            const ext = (dataMatch?.[1] || 'audio/webm').split('/')[1]?.split(';')[0] || 'webm';
+            const converted = await convertToOggOpus(media, ext);
+            if (!converted) throw new Error('No se pudo convertir el audio a ogg/opus (ffmpeg no disponible).');
+            payload.audio = converted;
+          }
+        } else if (options?.caption) {
+          payload.caption = options.caption;
         }
-        // Add other media types as needed
-        return await connection.socket?.sendMessage(jid, { document: { url }, caption: options?.caption });
+        if (mediaKey === 'document' && options?.filename) payload.fileName = options.filename;
+
+        return await connection.socket?.sendMessage(jid, payload);
       },
       sendImageMessage: async (to: string, base64Data: string, caption?: string) => {
         const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;

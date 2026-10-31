@@ -9,21 +9,27 @@ import { execFile } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import ffmpegStaticPath from 'ffmpeg-static';
 import { BasePlatformService, PlatformConnection, PlatformMessage, PlatformServiceAdapter } from './basePlatformService';
 import { supabase } from '../../../core/config/supabase';
 import { handleIncomingMessage } from '../../bots/engine/flow-core';
 
+// Binario de ffmpeg: variable de entorno, binario empaquetado (ffmpeg-static)
+// o el del sistema. Sin ffmpeg no se puede generar el ogg/opus que WhatsApp
+// exige para reproducir notas de voz.
+const FFMPEG_BIN = process.env.FFMPEG_PATH || (ffmpegStaticPath as unknown as string) || 'ffmpeg';
+
 // Convierte audio del navegador (webm/mp4) al único formato de nota de voz que
 // WhatsApp entrega: `audio/ogg` con codec Opus. Retorna el buffer .ogg o null si
-// falla/falta ffmpeg (en ese caso se sube el original).
-async function convertToOggOpus(input: Buffer, ext: string): Promise<Buffer | null> {
+// falla la conversión.
+export async function convertToOggOpus(input: Buffer, ext: string): Promise<Buffer | null> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-audio-'));
   const src = path.join(tmp, `in.${ext}`);
   const out = path.join(tmp, 'out.ogg');
   try {
     fs.writeFileSync(src, input);
     await new Promise<void>((resolve, reject) => {
-      execFile('ffmpeg', ['-y', '-i', src, '-vn', '-c:a', 'libopus', '-b:a', '48k', '-ar', '48000', '-ac', '1', out], { timeout: 20000 }, (err) => {
+      execFile(FFMPEG_BIN, ['-y', '-i', src, '-vn', '-c:a', 'libopus', '-b:a', '48k', '-ar', '48000', '-ac', '1', out], { timeout: 20000 }, (err) => {
         if (err) reject(err);
         else resolve();
       });
@@ -525,11 +531,14 @@ config: {
         let uploadFilename = filename;
         if (mediaType === 'audio') {
           const conv = await convertToOggOpus(uploadBuffer, ext);
-          if (conv) {
-            uploadMime = 'audio/ogg';
-            uploadBuffer = conv;
-            uploadFilename = `voice-${Date.now()}.ogg`;
+          if (!conv) {
+            // Enviar webm/mp4 como audio hace que el destinatario no escuche nada:
+            // es preferible fallar con un mensaje claro.
+            throw new Error('No se pudo convertir el audio a ogg/opus (ffmpeg no disponible en el servidor).');
           }
+          uploadMime = 'audio/ogg';
+          uploadBuffer = conv;
+          uploadFilename = `voice-${Date.now()}.ogg`;
         }
 
         // 1) Subir el media a Graph API -> media_id (multipart)
