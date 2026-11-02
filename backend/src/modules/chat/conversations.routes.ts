@@ -169,6 +169,9 @@ router.get('/', async (req, res) => {
             ? conv.contacts.profile_name
             : (displayPhone || storedPhone || 'Sin nombre'),
           profilePicture: conv.contacts?.profile_picture || null,
+          tags: Array.isArray(conv.contacts?.custom_attributes?.tags)
+            ? conv.contacts.custom_attributes.tags.filter((tag: any) => typeof tag === 'string' && tag.trim())
+            : [],
           isGroup: conv.contacts?.custom_attributes?.is_group ||
                    conv.contacts?.phone_number?.includes('-') ||
                    (displayPhone && displayPhone.length > 15)
@@ -298,9 +301,16 @@ router.post('/:id/reactivate-bot', async (req, res) => {
 router.post('/:id/send', async (req, res) => {
   try {
     const { id } = req.params;
-    const { text, mediaUrl, mediaType, caption } = req.body;
+    const { text, mediaUrl, mediaType, caption, location } = req.body;
 
-    if (!text && !mediaUrl) {
+    const latitude = Number(location?.latitude);
+    const longitude = Number(location?.longitude);
+    const hasLocation = !!location && Number.isFinite(latitude) && Number.isFinite(longitude);
+
+    if (location && !hasLocation) {
+      return res.status(400).json({ error: 'Ubicación inválida: se requieren latitude y longitude numéricos.' });
+    }
+    if (!text && !mediaUrl && !hasLocation) {
       return res.status(400).json({ error: 'El mensaje o el archivo no pueden estar vacíos' });
     }
 
@@ -381,7 +391,17 @@ router.post('/:id/send', async (req, res) => {
       }
       const adapter = whatsappCloudService.createServiceAdapter(cloudConn);
 
-      if (mediaUrl) {
+      if (hasLocation) {
+        if (!adapter.sendLocationMessage) {
+          return res.status(503).json({ error: 'La conexión no soporta el envío de ubicaciones.' });
+        }
+        sendResult = await adapter.sendLocationMessage(correctedPhone, {
+          latitude,
+          longitude,
+          name: location.name || 'Ubicación compartida',
+          address: location.address || '',
+        });
+      } else if (mediaUrl) {
         const isBase64 = typeof mediaUrl === 'string' && mediaUrl.startsWith('data:');
         if (isBase64 && adapter.sendMediaBuffer) {
           sendResult = await adapter.sendMediaBuffer(correctedPhone, mediaUrl, {
@@ -409,7 +429,14 @@ router.post('/:id/send', async (req, res) => {
 
       const adapter = (multiWhatsAppService as any).createWaServiceAdapter(activeConn);
 
-      if (mediaUrl) {
+      if (hasLocation) {
+        sendResult = await adapter.sendLocationMessage(correctedPhone, {
+          latitude,
+          longitude,
+          name: location.name || 'Ubicación compartida',
+          address: location.address || '',
+        }, { jid: contactJid });
+      } else if (mediaUrl) {
         sendResult = await adapter.sendMediaMessage(correctedPhone, mediaUrl, {
           jid: contactJid,
           type: mediaType || 'image',
@@ -449,6 +476,21 @@ router.post('/:id/send', async (req, res) => {
       }
     }
 
+    // Contenido normalizado de una ubicación compartida (mismo formato que el
+    // que produce el webhook para ubicaciones entrantes).
+    const locationContent = hasLocation
+      ? {
+          type: 'location',
+          location: {
+            latitude,
+            longitude,
+            name: location.name || 'Ubicación compartida',
+            address: location.address || '',
+            url: `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`,
+          },
+        }
+      : null;
+
     const { data: msg } = await supabase
       .from('messages')
       .insert({
@@ -456,9 +498,11 @@ router.post('/:id/send', async (req, res) => {
         conversation_id: id,
         contact_id: conversation.contact_id,
         direction: 'outbound',
-        type: mediaUrl ? (mediaType || 'image') : 'text',
+        type: hasLocation ? 'location' : mediaUrl ? (mediaType || 'image') : 'text',
         whatsapp_message_id: msgId,
-        content: mediaUrl
+        content: hasLocation
+          ? JSON.stringify(locationContent)
+          : mediaUrl
           ? JSON.stringify({
               url: storedMediaUrl,
               type: mediaType || 'image',
@@ -498,9 +542,13 @@ router.post('/:id/send', async (req, res) => {
     res.json({
       _id: savedMessage?.id,
       direction: 'outbound',
-      content: mediaUrl ? { url: storedMediaUrl, type: mediaType || 'image', filename: req.body.filename, caption: text } : (text || '').trim(),
+      content: hasLocation
+        ? locationContent
+        : mediaUrl
+        ? { url: storedMediaUrl, type: mediaType || 'image', filename: req.body.filename, caption: text }
+        : (text || '').trim(),
       createdAt: savedMessage?.created_at,
-      type: mediaUrl ? (mediaType || 'image') : 'text',
+      type: hasLocation ? 'location' : mediaUrl ? (mediaType || 'image') : 'text',
       status: 'sent'
     });
   } catch (error: any) {
@@ -516,7 +564,7 @@ router.post('/start', async (req, res) => {
     const orgId = (req as any).organizationId;
     if (!orgId) return res.status(404).json({ error: 'Organization not found' });
 
-    const { phoneNumber, text, templateName, languageCode, components, connectionId, provider } = req.body;
+    const { phoneNumber, text, templateName, languageCode, components, templatePreview, connectionId, provider } = req.body;
 
     if (!phoneNumber) {
       return res.status(400).json({ error: 'El número de teléfono es obligatorio' });
@@ -528,25 +576,10 @@ router.post('/start', async (req, res) => {
       ? '51' + cleanPhone
       : cleanPhone;
 
-    // Buscar o crear el contacto
-    const { data: contact } = await supabase
-      .from('contacts')
-      .upsert({
-        organization_id: orgId,
-        phone_number: normalizedPhone,
-        profile_name: 'Sin nombre',
-        last_active_at: new Date().toISOString(),
-      }, { onConflict: 'organization_id,phone_number' })
-      .select()
-      .single();
-
-    if (!contact) {
-      return res.status(500).json({ error: 'No se pudo crear el contacto' });
-    }
-
     let conversationPlatformType = 'whatsapp';
     let platformConnectionId: string | null = null;
     let messageContent = '';
+    let wamid: string | null = null;
 
     if (provider === 'whatsapp_cloud' && connectionId) {
       // ── Iniciar con Cloud API (template obligatorio) ──────────────────────
@@ -554,17 +587,35 @@ router.post('/start', async (req, res) => {
         return res.status(400).json({ error: 'Se requiere un template para iniciar conversaciones con Cloud API' });
       }
 
-      const cloudConn = whatsappCloudService.getConnection(connectionId);
+      let cloudConn = whatsappCloudService.getConnection(connectionId);
+      if (!cloudConn) {
+        // La conexión vive en memoria; tras un reinicio hay que rehidratarla.
+        try {
+          const { data: platformConn } = await supabase
+            .from('platform_connections')
+            .select('*')
+            .eq('id', connectionId)
+            .single();
+          if (platformConn) {
+            await whatsappCloudService.initializeConnection(platformConn);
+            cloudConn = whatsappCloudService.getConnection(connectionId);
+          }
+        } catch (initErr) {
+          console.error('[Conversations/start] Error initializing Cloud connection:', initErr);
+        }
+      }
       if (!cloudConn) {
         return res.status(503).json({ error: 'Conexión Cloud API no encontrada' });
       }
 
       const adapter = whatsappCloudService.createServiceAdapter(cloudConn);
-      await adapter.sendTemplateMessage!(normalizedPhone, templateName, languageCode || 'es', components || []);
+      const sendResult = await adapter.sendTemplateMessage!(normalizedPhone, templateName, languageCode || 'es', components || []);
+      wamid = sendResult?.messages?.[0]?.id || null;
 
       conversationPlatformType = 'whatsapp_cloud';
       platformConnectionId = connectionId;
-      messageContent = `[Template: ${templateName}]`;
+      messageContent = (templatePreview && String(templatePreview).trim())
+        || `[Plantilla: ${templateName}]`;
     } else {
       // ── Iniciar con Baileys (texto libre) ─────────────────────────────────
       if (!text) {
@@ -583,6 +634,40 @@ router.post('/start', async (req, res) => {
 
       platformConnectionId = activeConn.id || null;
       messageContent = text.trim();
+    }
+
+    // El contacto se busca/crea recién después de que el envío fue exitoso: así
+    // un template rechazado o una conexión caída no deja contactos fantasma.
+    // Un upsert con profile_name fijo borraría el nombre real ya guardado.
+    const { data: existingContact } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('organization_id', orgId)
+      .eq('phone_number', normalizedPhone)
+      .maybeSingle();
+
+    let contact = existingContact;
+    if (contact) {
+      await supabase
+        .from('contacts')
+        .update({ last_active_at: new Date().toISOString() })
+        .eq('id', contact.id);
+    } else {
+      const { data: createdContact } = await supabase
+        .from('contacts')
+        .insert({
+          organization_id: orgId,
+          phone_number: normalizedPhone,
+          profile_name: 'Sin nombre',
+          last_active_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+      contact = createdContact;
+    }
+
+    if (!contact) {
+      return res.status(500).json({ error: 'No se pudo crear el contacto' });
     }
 
     // Buscar conversación existente o crear una nueva
@@ -618,6 +703,7 @@ router.post('/start', async (req, res) => {
         contact_id: contact.id,
         direction: 'outbound',
         type: 'text',
+        whatsapp_message_id: wamid,
         content: messageContent,
         status: 'sent',
       });
@@ -685,7 +771,16 @@ router.get('/contacts', async (req, res) => {
       console.log('[Contacts API] First contact:', contacts[0]);
     }
 
-    res.json(contacts || []);
+    // Las etiquetas viven en custom_attributes.tags (JSONB) porque la tabla
+    // contacts no tiene columna propia. Se exponen también como `tags`.
+    const normalizedContacts = (contacts || []).map((contact: any) => ({
+      ...contact,
+      tags: Array.isArray(contact.custom_attributes?.tags)
+        ? contact.custom_attributes.tags.filter((tag: any) => typeof tag === 'string' && tag.trim())
+        : [],
+    }));
+
+    res.json(normalizedContacts);
   } catch (error) {
     console.error('Error fetching contacts:', error);
     res.status(500).json({ error: 'Failed to fetch contacts' });

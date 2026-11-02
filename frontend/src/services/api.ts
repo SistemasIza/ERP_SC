@@ -116,6 +116,9 @@ export const getContacts = async () => {
         profile_picture: c.profile_picture || null,
         platform_type: c.platform_type || 'whatsapp',
         bot_state: c.bot_state || 'main_menu',
+        tags: Array.isArray(c.tags)
+          ? c.tags
+          : (Array.isArray(c.custom_attributes?.tags) ? c.custom_attributes.tags : []),
         assigned_to: c.assigned_to || null,
         assigned_agent: c.assigned_agent || null,
         last_active_at: c.last_active_at,

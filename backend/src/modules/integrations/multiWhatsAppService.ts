@@ -820,6 +820,17 @@ export class MultiWhatsAppService {
 
         return await connection.socket?.sendMessage(jid, payload);
       },
+      sendLocationMessage: async (to: string, location: { latitude: number; longitude: number; name?: string; address?: string }, options?: { jid?: string }) => {
+        const jid = options?.jid || (to.includes('@') ? to : `${to}@s.whatsapp.net`);
+        return await connection.socket?.sendMessage(jid, {
+          location: {
+            degreesLatitude: location.latitude,
+            degreesLongitude: location.longitude,
+            name: location.name || undefined,
+            address: location.address || undefined,
+          },
+        });
+      },
       sendImageMessage: async (to: string, base64Data: string, caption?: string) => {
         const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
         const buffer = Buffer.from(base64Data, 'base64');

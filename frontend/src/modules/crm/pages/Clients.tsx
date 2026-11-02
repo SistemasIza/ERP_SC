@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
-import { MessageSquare, UserCheck, Cpu, Eye, Trash2, UserPlus, User, MoreVertical, UserX } from 'lucide-react';
+import { MessageSquare, UserCheck, Cpu, Eye, Trash2, UserPlus, User, MoreVertical, UserX, Tag, X } from 'lucide-react';
 import { Loader } from '../../../components/ui/Loader';
 import { FaWhatsapp, FaTelegram, FaInstagram, FaFacebookMessenger } from 'react-icons/fa';
 import { SiTiktok } from 'react-icons/si';
@@ -24,6 +24,16 @@ import { useNotifications } from '../../../contexts/NotificationContext';
 
 type SortField = 'phoneNumber' | 'firstInteraction' | 'lastInteraction' | 'totalMessages' | 'attendedBy' | 'usageTime';
 type SortOrder = 'asc' | 'desc';
+
+const MAX_TAGS_PER_CLIENT = 10;
+const MAX_TAG_LENGTH = 24;
+
+// Las etiquetas se guardan en contacts.custom_attributes.tags; el API las
+// expone también como `tags` de nivel superior.
+const getUserTags = (user: any): string[] => {
+  const raw = Array.isArray(user?.tags) ? user.tags : user?.custom_attributes?.tags;
+  return Array.isArray(raw) ? raw.filter((tag: any) => typeof tag === 'string' && tag.trim()) : [];
+};
 
 // Dropdown de 3 Puntos para las acciones del cliente
 const ClientActionsDropdown = ({
@@ -151,6 +161,7 @@ export const Clients = () => {
   const [filterChannel, setFilterChannel] = useState('all');
   const [filterAgent] = useState('all');
   const [filterState, setFilterState] = useState('all');
+  const [filterTag, setFilterTag] = useState('all');
   const [systemAgents, setSystemAgents] = useState<any[]>([]);
 
   // Modales
@@ -159,6 +170,8 @@ export const Clients = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
+  const [editingTags, setEditingTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
 
   // Modal de Asignar Agente
   const [assignModalUser, setAssignModalUser] = useState<any>(null);
@@ -191,6 +204,44 @@ export const Clients = () => {
     getSystemUsers()
       .then(agents => setSystemAgents(agents || []))
       .catch(err => console.error('Error fetching system agents:', err));
+  };
+
+  const allTags = Array.from(
+    new Set(users.flatMap((user) => getUserTags(user)))
+  ).sort((a, b) => a.localeCompare(b));
+
+  const tagSuggestions = allTags.filter(
+    (tag) => !editingTags.some((selected) => selected.toLowerCase() === tag.toLowerCase())
+  );
+
+  const addTag = (raw: string) => {
+    const value = raw.replace(/,+$/, '').trim();
+    if (!value) return;
+    if (editingTags.some((tag) => tag.toLowerCase() === value.toLowerCase())) {
+      setTagInput('');
+      return;
+    }
+    if (editingTags.length >= MAX_TAGS_PER_CLIENT) {
+      addNotification({
+        type: 'error',
+        title: 'Límite de etiquetas',
+        message: `Puedes agregar hasta ${MAX_TAGS_PER_CLIENT} etiquetas por cliente.`,
+      });
+      return;
+    }
+    setEditingTags((prev) => [...prev, value.slice(0, MAX_TAG_LENGTH)]);
+    setTagInput('');
+  };
+
+  const removeTag = (tag: string) => {
+    setEditingTags((prev) => prev.filter((item) => item !== tag));
+  };
+
+  const openCreateModal = () => {
+    setEditingUser(null);
+    setEditingTags([]);
+    setTagInput('');
+    setShowCreateModal(true);
   };
 
   const handleDelete = async () => {
@@ -238,14 +289,16 @@ export const Clients = () => {
     setCreating(true);
     try {
       if (editingUser) {
-        await updateCrmClient(editingUser.id, { name, email, phone, company: '', status: editingUser.status || 'lead', source: 'manual', notes: '' });
+        await updateCrmClient(editingUser.id, { name, email, phone, company: '', status: editingUser.status || 'lead', source: 'manual', notes: '', tags: editingTags });
         addNotification({ type: 'success', title: 'Cliente actualizado', message: `Se ha actualizado ${name}` });
       } else {
-        await createCrmClient({ name, email, phone, company: '', status: 'lead', source: 'manual', notes: '' });
+        await createCrmClient({ name, email, phone, company: '', status: 'lead', source: 'manual', notes: '', tags: editingTags });
         addNotification({ type: 'success', title: 'Cliente creado', message: `Se ha creado ${name}` });
       }
       setShowCreateModal(false);
       setEditingUser(null);
+      setEditingTags([]);
+      setTagInput('');
       fetchClients();
     } catch (err: any) {
       console.error('Error saving client:', err);
@@ -257,6 +310,8 @@ export const Clients = () => {
 
   const handleEditUser = (user: any) => {
     setEditingUser(user);
+    setEditingTags(getUserTags(user));
+    setTagInput('');
     setShowCreateModal(true);
   };
 
@@ -336,9 +391,13 @@ export const Clients = () => {
     const matchesSearch = !term ||
       (user.phone_number && String(user.phone_number).toLowerCase().includes(term)) ||
       (user.profile_name && String(user.profile_name).toLowerCase().includes(term)) ||
-      (user.assigned_agent?.name && String(user.assigned_agent.name).toLowerCase().includes(term));
+      (user.assigned_agent?.name && String(user.assigned_agent.name).toLowerCase().includes(term)) ||
+      getUserTags(user).some((tag) => tag.toLowerCase().includes(term));
 
     const matchesChannel = filterChannel === 'all' || detectChannel(user) === filterChannel;
+
+    const matchesTag = filterTag === 'all'
+      || getUserTags(user).some((tag) => tag.toLowerCase() === filterTag.toLowerCase());
 
     let matchesAgent = true;
     if (filterAgent === 'unassigned') {
@@ -354,7 +413,7 @@ export const Clients = () => {
       matchesState = user.bot_state !== 'handoff';
     }
 
-    return Boolean(matchesSearch && matchesChannel && matchesAgent && matchesState);
+    return Boolean(matchesSearch && matchesChannel && matchesAgent && matchesState && matchesTag);
   });
 
   const sortedUsers = [...filteredUsers].sort((a, b) => {
@@ -453,6 +512,29 @@ export const Clients = () => {
               </span>
             </div>
           </div>
+        );
+      }
+    },
+    {
+      key: 'tags',
+      header: 'Etiquetas',
+      mobilePriority: 'medium',
+      render: (_: any, user: any) => {
+        const tags = getUserTags(user);
+        return tags.length > 0 ? (
+          <div className="flex flex-wrap gap-1 max-w-[220px]">
+            {tags.map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-accent-500/10 text-accent-600 dark:text-accent-400 border border-accent-500/20 text-[10px] font-bold uppercase tracking-wider"
+              >
+                <Tag className="w-2.5 h-2.5" />
+                {tag}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs text-slate-400">Sin etiquetas</span>
         );
       }
     },
@@ -566,7 +648,7 @@ export const Clients = () => {
             <div className="bg-gray-50 dark:bg-dark-card px-4 h-10 flex items-center gap-3 rounded-lg border border-gray-200 dark:border-white/5">
               <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total: {users.length}</p>
             </div>
-            <HeaderButton variant="secondary" onClick={() => setShowCreateModal(true)} icon={<UserPlus className="w-4 h-4" />}>
+            <HeaderButton variant="secondary" onClick={openCreateModal} icon={<UserPlus className="w-4 h-4" />}>
               Nuevo Cliente
             </HeaderButton>
           </div>
@@ -578,7 +660,7 @@ export const Clients = () => {
           {/* ── Barra de filtros unificada ── */}
           <div className="flex flex-col sm:flex-row gap-3 mb-4">
             <SearchBar
-              placeholder="Buscar por número, nombre o agente..."
+              placeholder="Buscar por número, nombre, etiqueta o agente..."
               value={searchTerm}
               onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
             />
@@ -604,6 +686,16 @@ export const Clients = () => {
                   { value: 'messenger', label: 'Messenger' },
                 ]}
               />
+              {allTags.length > 0 && (
+                <Dropdown
+                  value={filterTag}
+                  onChange={(v) => { setFilterTag(v); setCurrentPage(1); }}
+                  options={[
+                    { value: 'all', label: 'Todas las etiquetas' },
+                    ...allTags.map((tag) => ({ value: tag, label: tag })),
+                  ]}
+                />
+              )}
               <ViewToggle value={viewMode} onChange={setViewMode} />
             </div>
           </div>
@@ -725,6 +817,26 @@ export const Clients = () => {
                           Última interacción: {formatDate(user.last_active_at)}
                         </p>
 
+                        {/* Tags */}
+                        {getUserTags(user).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {getUserTags(user).slice(0, 4).map((tag) => (
+                              <span
+                                key={tag}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-accent-500/10 text-accent-600 dark:text-accent-400 border border-accent-500/20 text-[10px] font-bold uppercase tracking-wider"
+                              >
+                                <Tag className="w-2.5 h-2.5" />
+                                {tag}
+                              </span>
+                            ))}
+                            {getUserTags(user).length > 4 && (
+                              <span className="text-[10px] font-bold text-slate-400 self-center">
+                                +{getUserTags(user).length - 4}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
                         {/* Hover CTA */}
                         <div className="absolute inset-0 rounded-2xl flex items-center justify-center bg-accent-500/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                           <span className="text-xs font-bold text-accent-500 flex items-center gap-1.5">
@@ -781,7 +893,7 @@ export const Clients = () => {
 
       <Modal
         open={showCreateModal}
-        onClose={() => { setShowCreateModal(false); setEditingUser(null); }}
+        onClose={() => { setShowCreateModal(false); setEditingUser(null); setEditingTags([]); setTagInput(''); }}
         title={editingUser ? "Editar Cliente" : "Agregar Cliente"}
         icon={<UserPlus className="w-5 h-5 text-accent-500" />}
       >
@@ -820,6 +932,70 @@ export const Clients = () => {
               defaultValue={editingUser?.email || ''}
               className="w-full px-4 py-3 dark:bg-white/5 border border-slate-200 dark:border-slate-800 rounded-2xl focus:border-accent-500/50 focus:ring-4 focus:ring-accent-500/5 outline-none transition-all font-bold text-sm text-slate-900 dark:text-white placeholder-slate-400/60"
             />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1.5">
+              Etiquetas <span className="font-medium text-slate-400">({editingTags.length}/{MAX_TAGS_PER_CLIENT})</span>
+            </label>
+            {editingTags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {editingTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-accent-500/10 text-accent-600 dark:text-accent-400 border border-accent-500/20 text-[10px] font-bold uppercase tracking-wider"
+                  >
+                    <Tag className="w-3 h-3" />
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => removeTag(tag)}
+                      className="ml-1 hover:text-red-500 transition-colors"
+                      title={`Quitar ${tag}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    addTag(tagInput);
+                  }
+                }}
+                placeholder="Escribe una etiqueta y pulsa Enter"
+                className="flex-1 px-4 py-3 dark:bg-white/5 border border-slate-200 dark:border-slate-800 rounded-2xl focus:border-accent-500/50 focus:ring-4 focus:ring-accent-500/5 outline-none transition-all font-bold text-sm text-slate-900 dark:text-white placeholder-slate-400/60"
+              />
+              <button
+                type="button"
+                onClick={() => addTag(tagInput)}
+                disabled={!tagInput.trim() || editingTags.length >= MAX_TAGS_PER_CLIENT}
+                className="px-4 py-3 rounded-2xl border border-accent-500/30 bg-accent-500/10 text-accent-600 dark:text-accent-400 text-[10px] font-black uppercase tracking-widest hover:bg-accent-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Añadir
+              </button>
+            </div>
+            {tagSuggestions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1 mt-2">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mr-1">Sugeridas:</span>
+                {tagSuggestions.slice(0, 8).map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => addTag(tag)}
+                    className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-[10px] font-bold text-slate-600 dark:text-slate-300 hover:border-accent-500/30 hover:text-accent-600 dark:hover:text-accent-400 transition-colors"
+                  >
+                    + {tag}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <button type="submit" disabled={creating} className="w-full py-3.5 bg-gradient-to-r from-accent-500 to-accent-600 text-black text-[10px] font-black uppercase tracking-widest rounded-xl hover:from-accent-600 hover:to-accent-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
             {creating ? <Loader size="xs" /> : <UserPlus className="w-4 h-4" />}

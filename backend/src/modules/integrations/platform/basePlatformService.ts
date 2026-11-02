@@ -45,6 +45,12 @@ export interface PlatformServiceAdapter {
     base64: string,
     options?: any
   ) => Promise<any>;
+  /** Envía una ubicación (estática) al contacto. */
+  sendLocationMessage?: (
+    to: string,
+    location: { latitude: number; longitude: number; name?: string; address?: string },
+    options?: any
+  ) => Promise<any>;
   /** Solo disponible en WhatsApp Cloud API. Envía un template aprobado por Meta. */
   sendTemplateMessage?: (
     to: string,

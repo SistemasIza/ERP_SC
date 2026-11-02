@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getConversations, getConversationMessages, deleteConversation, deleteUser, getCatalogs, getTeamUsers, assignAgentToConversation } from '../../../services/api';
 import api from '../../../services/api';
 import {
-  Check, CheckCheck, Send, Search, Filter, Users, MoreVertical, Smile, Paperclip, Mic, Star, MessageCircle, Trash2, ChevronLeft, ChevronRight, ChevronDown, Store, Package, X, Bell, BellOff, Shield, Plus, Cloud, QrCode, Bot, User, MapPin, Download, Sticker
+  Check, CheckCheck, Send, Search, Filter, Users, MoreVertical, Smile, Paperclip, Mic, Star, MessageCircle, Trash2, ChevronLeft, ChevronRight, ChevronDown, Store, Package, X, Bell, BellOff, Shield, Plus, Cloud, QrCode, Bot, User, MapPin, Download, Sticker, Camera, Video
 } from 'lucide-react';
 import { FaWhatsapp, FaTelegram, FaInstagram, FaFacebookMessenger, FaTiktok } from 'react-icons/fa';
 import { PageLoader } from '../../../components/layout/PageLoader';
@@ -15,6 +15,129 @@ import { useNotifications } from '../../../contexts/NotificationContext';
 
 const CONVERSATIONS_PAGE_SIZE = 30;
 const MAX_CONVERSATIONS = 200;
+
+type TemplateVariable = {
+  key: string;
+  label: string;
+  scope: 'header' | 'body' | 'button';
+  index: number;
+  name?: string;
+  buttonIndex?: number;
+};
+
+const collectTemplateVariables = (text: string | undefined, scope: TemplateVariable['scope'], buttonIndex?: number): TemplateVariable[] => {
+  if (!text) return [];
+  const prefix = scope === 'header' ? 'Encabezado' : scope === 'body' ? 'Mensaje' : 'Botón';
+  const positionals = new Set<number>();
+  const named: string[] = [];
+  const regex = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const token = match[1];
+    if (/^\d+$/.test(token)) {
+      positionals.add(parseInt(token, 10));
+    } else if (!named.includes(token)) {
+      named.push(token);
+    }
+  }
+
+  const positionalVars: TemplateVariable[] = Array.from(positionals)
+    .sort((a, b) => a - b)
+    .map(index => ({
+      key: `${scope}-${buttonIndex ?? ''}-${index}`,
+      label: `${prefix} {{${index}}}`,
+      scope,
+      index,
+      buttonIndex,
+    }));
+
+  const namedVars: TemplateVariable[] = named.map((name, nameIndex) => ({
+    key: `${scope}-${buttonIndex ?? ''}-${name}`,
+    label: `${prefix}: ${name}`,
+    scope,
+    index: nameIndex,
+    name,
+    buttonIndex,
+  }));
+
+  return [...positionalVars, ...namedVars];
+};
+
+const extractTemplateVariables = (template: any): TemplateVariable[] => {
+  const components = Array.isArray(template?.components) ? template.components : [];
+  const variables: TemplateVariable[] = [];
+
+  for (const component of components) {
+    const type = String(component?.type || '').toUpperCase();
+    if (type === 'HEADER' && String(component?.format || '').toUpperCase() === 'TEXT') {
+      variables.push(...collectTemplateVariables(component?.text, 'header'));
+    }
+    if (type === 'BODY') {
+      variables.push(...collectTemplateVariables(component?.text, 'body'));
+    }
+    if (type === 'BUTTONS' && Array.isArray(component?.buttons)) {
+      component.buttons.forEach((button: any, buttonIndex: number) => {
+        if (String(button?.type || '').toUpperCase() === 'URL') {
+          variables.push(...collectTemplateVariables(button?.url, 'button', buttonIndex));
+        }
+      });
+    }
+  }
+
+  return variables;
+};
+
+const buildTemplateComponents = (variables: TemplateVariable[], values: Record<string, string>) => {
+  // Meta distingue parámetros posicionales ({type:'text'}) de los nombrados
+  // ({parameter_name}) según cómo esté escrita la plantilla.
+  const parameter = (variable: TemplateVariable) => {
+    const text = (values[variable.key] || '').trim();
+    return variable.name
+      ? { type: 'text', parameter_name: variable.name, text }
+      : { type: 'text', text };
+  };
+  const components: any[] = [];
+
+  const headerVars = variables.filter(v => v.scope === 'header').sort((a, b) => a.index - b.index);
+  if (headerVars.length > 0) {
+    components.push({ type: 'header', parameters: headerVars.map(parameter) });
+  }
+
+  const bodyVars = variables.filter(v => v.scope === 'body').sort((a, b) => a.index - b.index);
+  if (bodyVars.length > 0) {
+    components.push({ type: 'body', parameters: bodyVars.map(parameter) });
+  }
+
+  const buttons = new Map<number, TemplateVariable[]>();
+  variables.filter(v => v.scope === 'button').forEach(v => {
+    const list = buttons.get(v.buttonIndex!) || [];
+    list.push(v);
+    buttons.set(v.buttonIndex!, list);
+  });
+  Array.from(buttons.entries())
+    .sort((a, b) => a[0] - b[0])
+    .forEach(([buttonIndex, list]) => {
+      components.push({
+        type: 'button',
+        sub_type: 'url',
+        index: String(buttonIndex),
+        parameters: list.sort((a, b) => a.index - b.index).map(parameter),
+      });
+    });
+
+  return components;
+};
+
+const buildTemplatePreview = (template: any, variables: TemplateVariable[], values: Record<string, string>) => {
+  const body = (Array.isArray(template?.components) ? template.components : [])
+    .find((component: any) => String(component?.type || '').toUpperCase() === 'BODY');
+  const text = body?.text;
+  if (!text) return '';
+  return String(text).replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match: string, token: string) => {
+    const variable = variables.find(v => v.scope === 'body' && (v.name === token || String(v.index) === token));
+    return variable ? (values[variable.key] || '').trim() : '';
+  });
+};
 
 export const Conversations = () => {
   const { addNotification, dismissHandoffAlert } = useNotifications();
@@ -61,6 +184,11 @@ export const Conversations = () => {
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const [isLocationMenuOpen, setIsLocationMenuOpen] = useState(false);
+  const [liveLocationActive, setLiveLocationActive] = useState(false);
+  const liveLocationWatchRef = useRef<number | null>(null);
+  const liveLocationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const liveLocationLastRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const [mutedConversations, setMutedConversations] = useState<Set<string>>(new Set());
   const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
   const [chatSearchTerm, setChatSearchTerm] = useState('');
@@ -78,13 +206,25 @@ export const Conversations = () => {
   const [loadingMetaTemplates, setLoadingMetaTemplates] = useState(false);
   const [selectedTemplateName, setSelectedTemplateName] = useState('');
   const [selectedTemplateLang, setSelectedTemplateLang] = useState('es');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
   const [submittingStart, setSubmittingStart] = useState(false);
+
+  const selectedMetaTemplate = useMemo(() => {
+    const byId = selectedTemplateId ? metaTemplates.find(t => t.id === selectedTemplateId) : null;
+    return byId || metaTemplates.find(t => t.name === selectedTemplateName) || null;
+  }, [metaTemplates, selectedTemplateId, selectedTemplateName]);
+  const selectedTemplateVariables = useMemo(
+    () => extractTemplateVariables(selectedMetaTemplate),
+    [selectedMetaTemplate]
+  );
 
   const openNewConversationModal = async () => {
     setShowStartModal(true);
     setStartPhone('');
     setStartText('');
     setSelectedTemplateName('');
+    setTemplateVariables({});
     try {
       const res = await api.get('/platform/connections');
       const conns = (res.data || []).filter((c: any) => c.platform_type === 'whatsapp');
@@ -101,16 +241,24 @@ export const Conversations = () => {
   const fetchMetaTemplates = async (connId: string) => {
     if (!connId) return;
     setLoadingMetaTemplates(true);
+    setTemplateVariables({});
     try {
       const res = await api.get(`/message-templates/meta-templates?connectionId=${connId}`);
-      setMetaTemplates(res.data || []);
-      if (res.data?.length > 0) {
-        setSelectedTemplateName(res.data[0].name);
-        setSelectedTemplateLang(res.data[0].language || 'es');
+      const templates = Array.isArray(res.data) ? res.data : [];
+      setMetaTemplates(templates);
+      if (templates.length > 0) {
+        setSelectedTemplateId(templates[0].id || '');
+        setSelectedTemplateName(templates[0].name);
+        setSelectedTemplateLang(templates[0].language || 'es');
+      } else {
+        setSelectedTemplateId('');
+        setSelectedTemplateName('');
       }
     } catch (err: any) {
       console.error('Error loading Meta templates', err);
       setMetaTemplates([]);
+      setSelectedTemplateId('');
+      setSelectedTemplateName('');
     } finally {
       setLoadingMetaTemplates(false);
     }
@@ -189,6 +337,16 @@ export const Conversations = () => {
       return;
     }
 
+    const missingVariable = selectedTemplateVariables.find(v => !(templateVariables[v.key] || '').trim());
+    if (startProvider === 'whatsapp_cloud' && missingVariable) {
+      addNotification({
+        type: 'error',
+        title: 'Variable requerida',
+        message: `Completa el valor de ${missingVariable.label} para enviar la plantilla.`
+      });
+      return;
+    }
+
     setSubmittingStart(true);
     try {
       const payload = {
@@ -196,6 +354,12 @@ export const Conversations = () => {
         text: startText.trim(),
         templateName: selectedTemplateName,
         languageCode: selectedTemplateLang,
+        components: startProvider === 'whatsapp_cloud'
+          ? buildTemplateComponents(selectedTemplateVariables, templateVariables)
+          : [],
+        templatePreview: startProvider === 'whatsapp_cloud'
+          ? buildTemplatePreview(selectedMetaTemplate, selectedTemplateVariables, templateVariables)
+          : '',
         connectionId: startCloudConnId,
         provider: startProvider
       };
@@ -203,12 +367,14 @@ export const Conversations = () => {
       const res = await api.post('/conversations/start', payload);
       addNotification({ type: 'success', title: 'Conversación iniciada', message: 'El mensaje ha sido enviado correctamente.' });
       setShowStartModal(false);
+      setTemplateVariables({});
 
-      if (res.data?.conversation) {
-        setSelectedConv(res.data.conversation);
+      const conversationId = res.data?.conversation?.id;
+      if (conversationId) {
         setShowMobileChat(true);
+        navigate(`/conversations/${conversationId}`);
       }
-      fetchConversationsList();
+      await fetchConversationsList();
     } catch (err: any) {
       addNotification({ type: 'error', title: 'Error al iniciar', message: err.response?.data?.error || err.message });
     } finally {
@@ -841,26 +1007,42 @@ export const Conversations = () => {
     return parsed.media?.type === 'sticker';
   };
 
+  type PreviewKind = 'image' | 'video' | 'audio' | 'document' | 'location' | 'sticker' | 'contact' | null;
+
   // Vista previa del último mensaje en la lista: si el mensaje no tiene texto
-  // (solo media), se muestra una etiqueta en lugar de dejarlo vacío.
-  const getConversationPreview = (content: any): string => {
+  // (solo media), se muestra una etiqueta en lugar de dejarlo vacío, junto con
+  // un icono del tipo de contenido (estilo WhatsApp).
+  const getConversationPreview = (content: any): { text: string; kind: PreviewKind } => {
     const text = parseMessage(content);
     const parsed = parseContentObject(content);
     if (parsed && typeof parsed === 'object') {
-      if (parsed.type === 'location' || parsed.location) return 'Ubicación';
-      if (parsed.type === 'contact' || parsed.contacts) return 'Contacto';
-      if (text) return text;
+      if (parsed.type === 'location' || parsed.location) return { text: 'Ubicación', kind: 'location' };
+      if (parsed.type === 'contact' || parsed.contacts) return { text: 'Contacto', kind: 'contact' };
+      if (text) return { text, kind: null };
       const hasMedia = parsed.url || parsed.media || parsed.imageMessage || parsed.videoMessage
         || parsed.audioMessage || parsed.documentMessage || parsed.stickerMessage || parsed.sticker;
-      if (!hasMedia) return text;
-      if (isStickerMessage(parsed)) return 'Sticker';
+      if (!hasMedia) return { text, kind: null };
+      if (isStickerMessage(parsed)) return { text: 'Sticker', kind: 'sticker' };
       const kind = mediaKindFrom(parsed.mime_type || parsed.mimeType, parsed.media?.type || parsed.type);
-      if (kind === 'video') return 'Video';
-      if (kind === 'audio') return 'Audio';
-      if (kind === 'document') return parsed.filename ? `Documento: ${parsed.filename}` : 'Documento';
-      return 'Foto';
+      if (kind === 'video') return { text: 'Video', kind: 'video' };
+      if (kind === 'audio') return { text: 'Audio', kind: 'audio' };
+      if (kind === 'document') return { text: parsed.filename ? `Documento: ${parsed.filename}` : 'Documento', kind: 'document' };
+      return { text: 'Foto', kind: 'image' };
     }
-    return text;
+    return { text, kind: null };
+  };
+
+  // Icono compacto que acompaña a la etiqueta del último mensaje (Foto, Audio…).
+  const PreviewIcon = ({ kind }: { kind: PreviewKind }) => {
+    if (!kind) return null;
+    const Icon = kind === 'image' ? Camera
+      : kind === 'video' ? Video
+      : kind === 'audio' ? Mic
+      : kind === 'document' ? Paperclip
+      : kind === 'location' ? MapPin
+      : kind === 'sticker' ? Sticker
+      : User;
+    return <Icon className="w-3 h-3 shrink-0" />;
   };
 
   const getMessageMedia = (content: any): { url: string; type: MediaKind; filename?: string; caption?: string } | null => {
@@ -1046,6 +1228,124 @@ export const Conversations = () => {
       setSending(false);
     }
   };
+
+  // Envía una ubicación al contacto. Con WhatsApp Cloud API no existe un
+  // mensaje de "ubicación en vivo" (solo estática), así que el modo en tiempo
+  // real reenvía la posición actualizada cada minuto como mensajes de ubicación.
+  const sendLocation = async (location: { latitude: number; longitude: number; name?: string; address?: string }) => {
+    if (!selectedConv || sending) return;
+    setSending(true);
+
+    const optimistic = {
+      _id: `tmp-${Date.now()}`,
+      direction: 'outbound',
+      content: {
+        type: 'location',
+        location: {
+          ...location,
+          url: `https://www.google.com/maps/search/?api=1&query=${location.latitude},${location.longitude}`,
+        },
+      },
+      createdAt: new Date().toISOString(),
+      type: 'location',
+      status: 'sending'
+    };
+    setMessages(prev => [...prev, optimistic]);
+
+    try {
+      const response = await api.post(`/conversations/${selectedConv._id}/send`, {
+        location,
+        whatsapp_connection_id: selectedConnectionId || undefined,
+      });
+      setMessages(prev => prev.map(m => m._id === optimistic._id ? response.data : m));
+    } catch (err: any) {
+      setMessages(prev => prev.filter(m => m._id !== optimistic._id));
+      addNotification({ type: 'error', title: 'Error', message: err.response?.data?.error || 'No se pudo enviar la ubicación.' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSendCurrentLocation = () => {
+    setIsLocationMenuOpen(false);
+    if (!selectedConv) return;
+    if (!navigator.geolocation) {
+      addNotification({ type: 'error', title: 'Ubicación no disponible', message: 'Este navegador no soporta geolocalización.' });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        void sendLocation({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          name: 'Mi ubicación actual',
+          address: '',
+        });
+      },
+      () => addNotification({ type: 'error', title: 'Ubicación no disponible', message: 'No se pudo obtener tu ubicación. Revisa los permisos del navegador.' }),
+      { enableHighAccuracy: true, timeout: 15000 }
+    );
+  };
+
+  const stopLiveLocation = () => {
+    if (liveLocationWatchRef.current != null) {
+      navigator.geolocation.clearWatch(liveLocationWatchRef.current);
+      liveLocationWatchRef.current = null;
+    }
+    if (liveLocationTimerRef.current) {
+      clearInterval(liveLocationTimerRef.current);
+      liveLocationTimerRef.current = null;
+    }
+    liveLocationLastRef.current = null;
+    setLiveLocationActive(false);
+  };
+
+  const startLiveLocation = () => {
+    setIsLocationMenuOpen(false);
+    if (!selectedConv) return;
+    if (!navigator.geolocation) {
+      addNotification({ type: 'error', title: 'Ubicación no disponible', message: 'Este navegador no soporta geolocalización.' });
+      return;
+    }
+    if (liveLocationActive) return;
+
+    const sendLatest = () => {
+      const coords = liveLocationLastRef.current;
+      if (!coords) return;
+      void sendLocation({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        name: 'Ubicación en tiempo real',
+        address: '',
+      });
+    };
+
+    liveLocationWatchRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        liveLocationLastRef.current = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 5000 }
+    );
+    setLiveLocationActive(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        liveLocationLastRef.current = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        sendLatest();
+      },
+      () => addNotification({ type: 'error', title: 'Ubicación no disponible', message: 'No se pudo obtener tu ubicación. Revisa los permisos del navegador.' }),
+      { enableHighAccuracy: true, timeout: 15000 }
+    );
+
+    liveLocationTimerRef.current = setInterval(sendLatest, 60000);
+    addNotification({ type: 'success', title: 'Ubicación en tiempo real', message: 'Se enviará tu posición actualizada cada minuto.' });
+  };
+
+  useEffect(() => () => {
+    if (liveLocationWatchRef.current != null) navigator.geolocation.clearWatch(liveLocationWatchRef.current);
+    if (liveLocationTimerRef.current) clearInterval(liveLocationTimerRef.current);
+  }, []);
 
   const handleDeleteConversation = async (e: React.MouseEvent, conversationId: string, contactId?: string) => {
     e.stopPropagation();
@@ -1348,12 +1648,14 @@ export const Conversations = () => {
             const avatar = generateAvatar(contact);
             const channelBadge = getChannelBadge(normalizeChannel(conv.channel));
             const ChannelIcon = channelBadge.icon;
+            const preview = getConversationPreview(conv.lastMessageContent);
 
             return (
               <div
                 key={conv._id}
                 onClick={() => {
                   if (selectedConv?._id !== conv._id) {
+                    stopLiveLocation();
                     setMessages([]);
                     setMessageText('');
                     setShowMobileChat(true);
@@ -1412,8 +1714,9 @@ export const Conversations = () => {
                   </div>
 
                   <div className="flex justify-between items-center">
-                    <p className={`text-[12px] truncate w-full pr-4 ${isSelected ? 'text-gray-600 dark:text-gray-400' : 'text-gray-400 dark:text-gray-500'}`}>
-                      {getConversationPreview(conv.lastMessageContent) || 'Sin mensajes'}
+                    <p className={`text-[12px] truncate w-full pr-4 flex items-center gap-1 min-w-0 ${isSelected ? 'text-gray-600 dark:text-gray-400' : 'text-gray-400 dark:text-gray-500'}`}>
+                      <PreviewIcon kind={preview.kind} />
+                      <span className="truncate">{preview.text || 'Sin mensajes'}</span>
                     </p>
 
                     <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1944,6 +2247,15 @@ export const Conversations = () => {
                   />
                 </div>
               )}
+              {liveLocationActive && (
+                <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-2xl bg-accent-500/10 border border-accent-500/30 text-accent-600 dark:text-accent-400">
+                  <MapPin className="w-4 h-4 animate-pulse" />
+                  <span className="text-[10px] font-black uppercase tracking-widest flex-1">Ubicación en tiempo real activa</span>
+                  <button onClick={stopLiveLocation} className="text-[10px] font-black uppercase tracking-widest underline hover:text-red-500 transition-colors">
+                    Detener
+                  </button>
+                </div>
+              )}
               <input type="file" ref={fileInputRef} onChange={handleFileSelected} accept="image/*,.pdf,.doc,.docx" className="hidden" />
               {isRecording ? (
                 <div className="bg-white dark:bg-dark-card rounded-[1.5rem] shadow-xl border border-red-200 dark:border-red-500/30 flex items-center px-4 md:px-6 py-2.5 md:py-3 gap-3 animate-in fade-in duration-200">
@@ -1984,6 +2296,39 @@ export const Conversations = () => {
                     <button onClick={handleAttachFile} className="p-1.5 md:p-2 text-gray-400 hover:text-accent-500 transition-all">
                       <Paperclip className="w-4 h-4 md:w-5 md:h-5" />
                     </button>
+                    <div className="relative">
+                      <button
+                        onClick={() => setIsLocationMenuOpen(!isLocationMenuOpen)}
+                        className={`p-1.5 md:p-2 transition-all ${isLocationMenuOpen || liveLocationActive ? 'text-accent-500 bg-accent-500/10 rounded-lg' : 'text-gray-400 hover:text-accent-500'}`}
+                        title="Ubicación"
+                      >
+                        <MapPin className="w-4 h-4 md:w-5 md:h-5" />
+                      </button>
+                      {isLocationMenuOpen && (
+                        <>
+                          <div className="fixed inset-0 z-40" onClick={() => setIsLocationMenuOpen(false)} />
+                          <div className="absolute bottom-full right-0 mb-2 w-60 bg-white dark:bg-dark-card border border-gray-100 dark:border-white/5 rounded-2xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                            <div className="p-3 border-b border-gray-100 dark:border-white/5">
+                              <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Ubicación</span>
+                            </div>
+                            <button onClick={handleSendCurrentLocation} className="w-full text-left px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-white/5 flex items-center gap-2.5 transition-colors">
+                              <MapPin className="w-4 h-4 text-accent-500 shrink-0" />
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-bold text-gray-900 dark:text-white">Mi ubicación actual</p>
+                                <p className="text-[9px] font-medium text-gray-400">Envía un punto fijo</p>
+                              </div>
+                            </button>
+                            <button onClick={liveLocationActive ? stopLiveLocation : startLiveLocation} className="w-full text-left px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-white/5 flex items-center gap-2.5 transition-colors">
+                              <MapPin className={`w-4 h-4 shrink-0 ${liveLocationActive ? 'text-red-500' : 'text-accent-500'}`} />
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-bold text-gray-900 dark:text-white">{liveLocationActive ? 'Detener ubicación en tiempo real' : 'Ubicación en tiempo real'}</p>
+                                <p className="text-[9px] font-medium text-gray-400">{liveLocationActive ? 'Se está compartiendo tu posición' : 'Comparte tu posición cada minuto'}</p>
+                              </div>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
                     <div className="relative">
                       <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-1.5 md:p-2 text-gray-400 hover:text-accent-500 transition-all">
                         <Smile className="w-4 h-4 md:w-5 md:h-5" />
@@ -2175,22 +2520,51 @@ export const Conversations = () => {
                       <p className="text-xs text-red-500">No se encontraron plantillas aprobadas en tu cuenta de Meta.</p>
                     ) : (
                       <select
-                        value={selectedTemplateName}
+                        value={selectedTemplateId || selectedTemplateName}
                         onChange={e => {
-                          const t = metaTemplates.find(tmpl => tmpl.name === e.target.value);
-                          setSelectedTemplateName(e.target.value);
-                          if (t?.language) setSelectedTemplateLang(t.language);
+                          const t = metaTemplates.find(tmpl => (tmpl.id || tmpl.name) === e.target.value);
+                          setSelectedTemplateId(t?.id || '');
+                          setSelectedTemplateName(t?.name || e.target.value);
+                          setSelectedTemplateLang(t?.language || 'es');
+                          setTemplateVariables({});
                         }}
                         className="w-full px-4 py-3 dark:bg-white/5 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white"
                       >
                         {metaTemplates.map(tmpl => (
-                          <option key={tmpl.id || tmpl.name} value={tmpl.name}>
+                          <option key={tmpl.id || tmpl.name} value={tmpl.id || tmpl.name}>
                             {tmpl.name} ({tmpl.language || 'es'}) — {tmpl.category}
                           </option>
                         ))}
                       </select>
                     )}
                   </div>
+
+                  {selectedMetaTemplate && (() => {
+                    const bodyComponent = (Array.isArray(selectedMetaTemplate.components) ? selectedMetaTemplate.components : [])
+                      .find((c: any) => String(c?.type || '').toUpperCase() === 'BODY');
+                    return bodyComponent?.text ? (
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-slate-700">
+                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Contenido</p>
+                        <p className="text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap">{bodyComponent.text}</p>
+                      </div>
+                    ) : null;
+                  })()}
+
+                  {selectedTemplateVariables.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Variables de la plantilla</label>
+                      {selectedTemplateVariables.map(variable => (
+                        <input
+                          key={variable.key}
+                          type="text"
+                          placeholder={variable.label}
+                          value={templateVariables[variable.key] || ''}
+                          onChange={e => setTemplateVariables(prev => ({ ...prev, [variable.key]: e.target.value }))}
+                          className="w-full px-4 py-2.5 dark:bg-white/5 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm text-slate-900 dark:text-white"
+                        />
+                      ))}
+                    </div>
+                  )}
                 </>
               )}
             </>

@@ -595,6 +595,35 @@ config: {
         return sendRes.data;
       },
 
+      sendLocationMessage: async (to: string, location: { latitude: number; longitude: number; name?: string; address?: string }) => {
+        const phoneNumber = to.includes('@') ? to.split('@')[0] : to;
+        const url = `https://graph.facebook.com/v21.0/${config.phoneNumberId}/messages`;
+
+        const locationPayload: any = {
+          latitude: location.latitude,
+          longitude: location.longitude,
+        };
+        if (location.name) locationPayload.name = location.name;
+        if (location.address) locationPayload.address = location.address;
+
+        const response = await axios({
+          method: 'POST',
+          url,
+          headers: {
+            'Authorization': `Bearer ${config.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          data: {
+            messaging_product: 'whatsapp',
+            to: phoneNumber,
+            type: 'location',
+            location: locationPayload,
+          },
+        });
+
+        return response.data;
+      },
+
       sendTemplateMessage: async (
         to: string,
         templateName: string,

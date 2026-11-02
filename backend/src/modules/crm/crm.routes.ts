@@ -37,7 +37,10 @@ router.post('/clients', async (req, res) => {
     const orgId = (req as any).organizationId;
     if (!orgId) return res.status(404).json({ error: 'Organization not found' });
 
-    const { name, email, phone, company, status, source, notes, assigned_to } = req.body;
+    const { name, email, phone, company, status, source, notes, assigned_to, tags } = req.body;
+    const safeTags: string[] = Array.isArray(tags)
+      ? Array.from(new Set(tags.map((t: any) => String(t ?? '').trim()).filter(Boolean))).slice(0, 20)
+      : [];
 
     const { data, error } = await supabase
       .from('crm_clients')
@@ -60,7 +63,42 @@ router.post('/clients', async (req, res) => {
       return res.status(500).json({ error: 'Failed to create client' });
     }
 
-    res.status(201).json(data);
+    // La lista de clientes se alimenta de `contacts`, así que el cliente recién
+    // creado también se registra ahí (con sus etiquetas en custom_attributes)
+    // para que aparezca en el directorio y pueda recibir mensajes.
+    if (phone) {
+      const { data: existingRows } = await supabase
+        .from('contacts')
+        .select('id, custom_attributes')
+        .eq('organization_id', orgId)
+        .eq('phone_number', phone)
+        .limit(1);
+      const existingContact = existingRows?.[0];
+
+      if (existingContact) {
+        if (safeTags.length > 0) {
+          await supabase
+            .from('contacts')
+            .update({
+              custom_attributes: { ...(existingContact.custom_attributes || {}), tags: safeTags },
+            })
+            .eq('id', existingContact.id)
+            .eq('organization_id', orgId);
+        }
+      } else {
+        await supabase
+          .from('contacts')
+          .insert({
+            organization_id: orgId,
+            phone_number: phone,
+            profile_name: name || 'Sin nombre',
+            platform_type: 'whatsapp',
+            custom_attributes: { tags: safeTags },
+          });
+      }
+    }
+
+    res.status(201).json({ ...data, tags: safeTags });
   } catch (err) {
     console.error('Detailed Error:', err);
     res.status(500).json({ error: 'Failed to create client' });
@@ -74,7 +112,12 @@ router.put('/clients/:id', async (req, res) => {
     if (!orgId) return res.status(404).json({ error: 'Organization not found' });
 
     const { id } = req.params;
-    const updates = req.body;
+    // Las etiquetas se guardan en contacts.custom_attributes.tags (la tabla
+    // contacts no tiene columna propia) y se excluyen del update de crm_clients.
+    const { tags, ...updates } = req.body;
+    const safeTags: string[] | null = Array.isArray(tags)
+      ? Array.from(new Set(tags.map((t: any) => String(t ?? '').trim()).filter(Boolean))).slice(0, 20)
+      : null;
 
     // 1. Intentar actualizar en crm_clients
     const { data: crmClient, error: crmError } = await supabase
@@ -87,27 +130,57 @@ router.put('/clients/:id', async (req, res) => {
 
     if (crmClient) {
       // Sincronizar también con contacts si existe
-      if (updates.phone || updates.name) {
-        await supabase
-          .from('contacts')
-          .update({
-            ...(updates.name ? { profile_name: updates.name } : {}),
-            ...(updates.phone ? { phone_number: updates.phone } : {}),
-          })
-          .eq('organization_id', orgId)
-          .eq('phone_number', updates.phone || crmClient.phone);
+      if (updates.phone || updates.name || safeTags) {
+        const targetPhone = updates.phone || crmClient.phone;
+        if (targetPhone) {
+          const { data: matchedContact } = await supabase
+            .from('contacts')
+            .select('id, custom_attributes')
+            .eq('organization_id', orgId)
+            .eq('phone_number', targetPhone)
+            .maybeSingle();
+
+          if (matchedContact) {
+            await supabase
+              .from('contacts')
+              .update({
+                ...(updates.name ? { profile_name: updates.name } : {}),
+                ...(updates.phone ? { phone_number: updates.phone } : {}),
+                ...(safeTags
+                  ? { custom_attributes: { ...(matchedContact.custom_attributes || {}), tags: safeTags } }
+                  : {}),
+              })
+              .eq('id', matchedContact.id)
+              .eq('organization_id', orgId);
+          }
+        }
       }
-      return res.json(crmClient);
+      return res.json({ ...crmClient, tags: safeTags ?? crmClient.tags ?? [] });
     }
 
     // 2. Si no estaba en crm_clients, verificar y actualizar en contacts (la lista de clientes muestra contacts)
+    const { data: existingContact } = await supabase
+      .from('contacts')
+      .select('custom_attributes')
+      .eq('id', id)
+      .eq('organization_id', orgId)
+      .maybeSingle();
+
+    const contactUpdate: Record<string, any> = {
+      ...(updates.name ? { profile_name: updates.name } : {}),
+      ...(updates.phone ? { phone_number: updates.phone } : {}),
+      last_active_at: new Date().toISOString(),
+    };
+    if (safeTags) {
+      contactUpdate.custom_attributes = {
+        ...(existingContact?.custom_attributes || {}),
+        tags: safeTags,
+      };
+    }
+
     const { data: contact, error: contactError } = await supabase
       .from('contacts')
-      .update({
-        ...(updates.name ? { profile_name: updates.name } : {}),
-        ...(updates.phone ? { phone_number: updates.phone } : {}),
-        last_active_at: new Date().toISOString(),
-      })
+      .update(contactUpdate)
       .eq('id', id)
       .eq('organization_id', orgId)
       .select()
@@ -120,6 +193,7 @@ router.put('/clients/:id', async (req, res) => {
         phone: contact.phone_number,
         email: updates.email || '',
         status: updates.status || 'lead',
+        tags: contact.custom_attributes?.tags || [],
       });
     }
 
