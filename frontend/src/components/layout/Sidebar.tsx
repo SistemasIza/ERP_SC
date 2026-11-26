@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   LayoutDashboard, Users, MessageSquare, BarChart3,
-  MessageCircle, CreditCard, TrendingUp, QrCode, Store,
+  MessageCircle as _MessageCircle, CreditCard, TrendingUp, QrCode, Store,
   ChevronLeft, ChevronRight, ShieldAlert, BadgeInfo, ChevronDown,
   ShoppingBag, Tag,
   Bot, Bell, CreditCard as PaymentIcon,
@@ -243,25 +243,27 @@ export const Sidebar = ({ onCollapsedChange, isMobileOpen, onMobileClose }: Side
       <div
         className={`
           flex items-center gap-3 px-4
-          bg-gradient-to-b from-slate-50/80 to-transparent dark:from-white/[0.02] to-transparent
+          bg-gradient-to-b from-white/[0.03] to-transparent
           ${collapsed && !mobile ? 'justify-center h-16' : 'h-[72px]'}
         `}
       >
-        <div className="flex-shrink-0 w-9 h-9 bg-slate-900 dark:bg-white rounded-xl flex items-center justify-center shadow-md shadow-slate-900/10 dark:shadow-white/5">
-          <MessageCircle className="w-4 h-4 text-white dark:text-black" strokeWidth={2.5} />
-        </div>
-        {(!collapsed || mobile) && (
-          <div className="overflow-hidden flex-1 min-w-0">
-            <h1 className="text-sm font-black text-slate-900 dark:text-white leading-none tracking-tight whitespace-nowrap">
-              CRM GSC
-            </h1>
-            <p className="text-[9px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-[0.15em] whitespace-nowrap mt-1">
-              Admin Suite
-            </p>
+        {collapsed && !mobile ? (
+          /* Ícono solo cuando está colapsado */
+          <div className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center">
+            <img src="/favicon.png" alt="Logo" className="w-9 h-9 object-contain" />
+          </div>
+        ) : (
+          /* Logo completo cuando está expandido */
+          <div className="overflow-hidden flex-1 min-w-0 flex items-center">
+            <img
+              src="/logo-en-blanco.png"
+              alt="Corporación San Cristobal"
+              className="h-10 w-auto object-contain"
+            />
           </div>
         )}
         {mobile && onMobileClose && (
-          <button onClick={onMobileClose} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-slate-400">
+          <button onClick={onMobileClose} className="p-1 rounded-lg hover:bg-white/10 text-slate-400 ml-auto">
             <ChevronLeft className="w-5 h-5" />
           </button>
         )}
@@ -475,7 +477,7 @@ export const Sidebar = ({ onCollapsedChange, isMobileOpen, onMobileClose }: Side
       </nav>
 
       {/* ===== FOOTER / COLLAPSE ===== */}
-      <div className="border-t border-[#E5E7EB] dark:border-[#333333] px-2 py-2.5 space-y-1">
+      <div className="border-t border-[#1f1f1f] px-2 py-2.5 space-y-1">
         {(!collapsed || mobile) && user && (
           <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg mb-1">
             <div className="w-7 h-7 rounded-lg bg-accent-500/10 flex items-center justify-center text-accent-500 text-[10px] font-black shrink-0">
@@ -516,8 +518,8 @@ export const Sidebar = ({ onCollapsedChange, isMobileOpen, onMobileClose }: Side
       {/* Desktop sidebar */}
       <aside
         className={`hidden md:flex md:flex-col relative transition-all duration-300 ease-in-out
-          bg-white dark:bg-[#1a1a1a]
-          border-r border-[#E5E7EB] dark:border-[#333333]
+          bg-[#0f0f0f]
+          border-r border-[#1f1f1f]
           ${collapsed ? 'w-[68px]' : 'w-[240px]'}
         `}
       >
@@ -533,8 +535,8 @@ export const Sidebar = ({ onCollapsedChange, isMobileOpen, onMobileClose }: Side
           />
           <aside
             className="fixed left-0 top-0 bottom-0 z-50 md:hidden flex flex-col
-              w-[280px] bg-white dark:bg-[#1a1a1a]
-              border-r border-[#E5E7EB] dark:border-[#333333]
+              w-[280px] bg-[#0f0f0f]
+              border-r border-[#1f1f1f]
               animate-in slide-in-from-left duration-300"
           >
             {sidebarContent(true)}
