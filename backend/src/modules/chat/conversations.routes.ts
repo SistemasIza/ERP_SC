@@ -500,29 +500,58 @@ router.post('/:id/send', async (req, res) => {
     let sendResult: any = null;
 
     // ── ROUTER DE PROVEEDOR ──────────────────────────────────────────────────
-    // La conexión Cloud API se identifica por la presencia de platform_connection_id
-    // (el platform_type puede ser 'whatsapp' o 'whatsapp_cloud').
-    if ((conversation.platform_type === 'whatsapp_cloud' || conversation.platform_type === 'whatsapp') && conversation.platform_connection_id) {
-      // ── Cloud API ──────────────────────────────────────────────────────────
-      let cloudConn = whatsappCloudService.getConnection(conversation.platform_connection_id);
-      if (!cloudConn) {
-        // Inicializar desde la BD en memoria si aún no está cargada (p.ej. tras un reinicio)
-        try {
-          const { data: platformConn } = await supabase
+    // La conexión Cloud API se identifica por platform_connection_id. Si falta
+    // (p.ej. conversación antigua o creada antes de fijar el id), intentamos
+    // resolver la conexión Cloud conectada de la organización.
+    let cloudConnectionId = conversation.platform_connection_id || null;
+    let cloudConn = cloudConnectionId ? whatsappCloudService.getConnection(cloudConnectionId) : undefined;
+
+    if (!cloudConn) {
+      try {
+        let platformConn: any = null;
+        if (cloudConnectionId) {
+          const { data } = await supabase
             .from('platform_connections')
             .select('*')
-            .eq('id', conversation.platform_connection_id)
+            .eq('id', cloudConnectionId)
             .single();
-          if (platformConn) {
-            await whatsappCloudService.initializeConnection(platformConn);
-            cloudConn = whatsappCloudService.getConnection(conversation.platform_connection_id);
+          platformConn = data;
+        } else {
+          const { data } = await supabase
+            .from('platform_connections')
+            .select('*')
+            .eq('organization_id', orgId)
+            .eq('platform_type', 'whatsapp')
+            .eq('status', 'connected')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          platformConn = data;
+          if (platformConn?.id) {
+            cloudConnectionId = platformConn.id;
+            await supabase
+              .from('conversations')
+              .update({ platform_type: 'whatsapp', platform_connection_id: platformConn.id })
+              .eq('id', id)
+              .eq('organization_id', orgId);
           }
-        } catch (initErr) {
-          console.error('[Conversations] Error initializing Cloud connection:', initErr);
         }
+
+        if (platformConn) {
+          await whatsappCloudService.initializeConnection(platformConn);
+          cloudConn = whatsappCloudService.getConnection(platformConn.id);
+          cloudConnectionId = platformConn.id;
+        }
+      } catch (initErr) {
+        console.error('[Conversations] Error initializing Cloud connection:', initErr);
       }
+    }
+
+    const isCloudConversation = (conversation.platform_type === 'whatsapp_cloud' || conversation.platform_type === 'whatsapp') && !!cloudConnectionId;
+    if (isCloudConversation) {
+      // ── Cloud API ──────────────────────────────────────────────────────────
       if (!cloudConn) {
-        return res.status(503).json({ error: 'La conexión de WhatsApp Cloud API no está disponible.' });
+        return res.status(503).json({ error: 'La conexión de WhatsApp Cloud API no está disponible. Verifica la conexión en Integraciones.' });
       }
       const adapter = whatsappCloudService.createServiceAdapter(cloudConn);
 

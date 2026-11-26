@@ -177,12 +177,12 @@ export const CustomizationProvider = ({ children }: { children: ReactNode }) => 
   });
 
   const fontFamilyMap: Record<string, string> = {
-    outfit: "'Outfit', 'Plus Jakarta Sans', 'Inter', sans-serif",
-    inter: "'Outfit', 'Plus Jakarta Sans', 'Inter', sans-serif",
-    system: "'Outfit', 'Plus Jakarta Sans', 'Inter', sans-serif",
-    mono: "'JetBrains Mono', 'Fira Code', monospace",
-    sans: "'Outfit', 'Plus Jakarta Sans', 'Inter', sans-serif",
-    serif: "'Outfit', 'Plus Jakarta Sans', 'Inter', sans-serif",
+    outfit: "'Outfit', 'Plus Jakarta Sans', 'Inter', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', 'Noto Emoji', sans-serif",
+    inter: "'Outfit', 'Plus Jakarta Sans', 'Inter', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', 'Noto Emoji', sans-serif",
+    system: "'Outfit', 'Plus Jakarta Sans', 'Inter', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', 'Noto Emoji', sans-serif",
+    mono: "'JetBrains Mono', 'Fira Code', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', 'Noto Emoji', monospace",
+    sans: "'Outfit', 'Plus Jakarta Sans', 'Inter', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', 'Noto Emoji', sans-serif",
+    serif: "'Outfit', 'Plus Jakarta Sans', 'Inter', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', 'Noto Emoji', sans-serif",
   };
 
   useEffect(() => {

@@ -28,7 +28,7 @@
     --accent-950: 2 44 34;
     --radius: 16px;
     --table-cell-padding: 12px 16px;
-    --font-family: 'Outfit', 'Plus Jakarta Sans', 'Inter', sans-serif;
+    --font-family: 'Outfit', 'Plus Jakarta Sans', 'Inter', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', 'Noto Emoji', sans-serif;
     --badge-success: var(--accent-500);
     --badge-warning: var(--accent-400);
     --badge-danger: 244 63 94;

@@ -76,6 +76,32 @@ const PreviewIcon = ({ kind }: { kind: 'image' | 'video' | 'audio' | 'document' 
   return <Icon className="w-3 h-3 shrink-0" />;
 };
 
+const StickerMedia = ({ url, isMe }: { url: string; isMe: boolean }) => {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => setFailed(false), [url]);
+
+  if (failed) {
+    return (
+      <div className={`-mx-5 -mt-3 mb-2 rounded-t-2xl px-4 py-3 flex items-center gap-3 ${isMe ? 'bg-gray-50 dark:bg-white/5' : 'bg-white/15'}`}>
+        <Sticker className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-accent-500' : 'text-white'}`} />
+        <span className={`text-xs font-semibold ${isMe ? 'text-gray-600 dark:text-gray-300' : 'text-white'}`}>Sticker no disponible</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`-mx-5 -mt-3 mb-2 rounded-t-2xl px-4 py-3 flex justify-center ${isMe ? 'bg-gray-50 dark:bg-white/5' : 'bg-white/15'}`}>
+      <img
+        src={url}
+        alt="Sticker"
+        className="w-40 h-40 max-w-full object-contain"
+        onError={() => setFailed(true)}
+      />
+    </div>
+  );
+};
+
 const BotStatusIndicator = ({ conv, sizeClass = 'w-3.5 h-3.5' }: { conv: any; sizeClass?: string }) => {
   const state = conv?.contactId?.bot_state || conv?.contactId?.botState || conv?.botState;
   const status = state === 'handoff' ? 'handoff' : typeof state === 'string' && state.startsWith('capture_') ? 'capture' : 'active';
@@ -1277,6 +1303,8 @@ export const Conversations = () => {
       [parsed.videoMessage, 'video'],
       [parsed.audioMessage, 'audio'],
       [parsed.documentMessage, 'document'],
+      [parsed.stickerMessage, 'sticker'],
+      [parsed.sticker, 'sticker'],
       [parsed.image, 'image'],
       [parsed.video, 'video'],
       [parsed.audio, 'audio'],
@@ -1285,6 +1313,8 @@ export const Conversations = () => {
       [parsed.raw?.videoMessage, 'video'],
       [parsed.raw?.audioMessage, 'audio'],
       [parsed.raw?.documentMessage, 'document'],
+      [parsed.raw?.stickerMessage, 'sticker'],
+      [parsed.raw?.sticker, 'sticker'],
       [parsed.raw?.image, 'image'],
       [parsed.raw?.video, 'video'],
       [parsed.raw?.audio, 'audio'],
@@ -2261,8 +2291,8 @@ export const Conversations = () => {
                 const media = rendered.media;
                 const sticker = rendered.sticker;
                 const location = rendered.location;
-                const unavailableMedia = !media && !sticker && !location && ['image', 'video', 'audio', 'document'].includes(m.type)
-                  ? (m.type === 'audio' ? 'Audio no disponible' : m.type === 'video' ? 'Video no disponible' : m.type === 'image' ? 'Imagen no disponible' : 'Archivo no disponible')
+                const unavailableMedia = !media && !location && (sticker || ['image', 'video', 'audio', 'document'].includes(m.type))
+                  ? (sticker ? 'Sticker no disponible' : m.type === 'audio' ? 'Audio no disponible' : m.type === 'video' ? 'Video no disponible' : m.type === 'image' ? 'Imagen no disponible' : 'Archivo no disponible')
                   : null;
                 const isCurrentSearch = chatSearchResults[chatSearchIndex]?.index === msgIdx;
 
@@ -2279,11 +2309,8 @@ export const Conversations = () => {
                         ? 'bg-white dark:bg-[#202020] text-gray-900 dark:text-gray-100 rounded-br-[4px] border border-gray-200/70 dark:border-white/10 shadow-sm'
                         : 'bg-gradient-to-br from-accent-500 to-accent-600 text-white rounded-bl-[4px] border border-white/15 shadow-md shadow-accent-500/20'
                         }`}>
-                        {sticker ? (
-                          <div className={`-mx-5 -mt-3 mb-2 rounded-t-2xl px-4 py-3 flex items-center gap-3 ${isMe ? 'bg-gray-50 dark:bg-white/5' : 'bg-white/15'}`}>
-                            <Sticker className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-accent-500' : 'text-white'}`} />
-                            <span className={`text-xs font-semibold ${isMe ? 'text-gray-600 dark:text-gray-300' : 'text-white'}`}>Sticker</span>
-                          </div>
+                        {sticker && media ? (
+                          <StickerMedia url={media.url} isMe={isMe} />
                         ) : media ? (
                           <div className="-mx-5 -mt-3 mb-2 rounded-t-2xl overflow-hidden">
                             {media.type === 'image' ? (
