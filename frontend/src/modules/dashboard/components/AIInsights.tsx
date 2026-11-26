@@ -74,7 +74,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({ insights: propInsights }
   return (
     <DashboardCard
       title="AI Insights"
-      subtitle={paused ? 'Resumen pausado' : insights.length > 1 ? 'Resumen IA en rotación' : 'Conclusión de SparkBot AI'}
+      subtitle={paused ? 'Resumen pausado' : insights.length > 1 ? 'Resumen IA en rotación' : 'Conclusión de CRM GSC IA'}
       icon={<Sparkles className="w-4 h-4" />}
     >
       <style>{`

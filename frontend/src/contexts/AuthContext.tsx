@@ -27,6 +27,7 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const SESSION_KEY = 'sparkbot_session';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -36,7 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     // Restore session from localStorage
-    const savedSession = localStorage.getItem('sparkbot_session');
+    const savedSession = localStorage.getItem(SESSION_KEY);
     if (savedSession) {
       try {
         const { user: savedUser, organizationId: savedOrgId, activeProfile: savedProfile } = JSON.parse(savedSession);
@@ -45,11 +46,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setOrganizationId(savedOrgId || savedUser.organization_id || null);
           if (savedProfile) setActiveProfile(savedProfile);
         } else {
-          localStorage.removeItem('sparkbot_session');
+          localStorage.removeItem(SESSION_KEY);
         }
       } catch (e) {
         console.error('Failed to restore session', e);
-        localStorage.removeItem('sparktree_session');
+        localStorage.removeItem(SESSION_KEY);
       }
     }
     setLoading(false);
@@ -58,51 +59,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (user: User, organizationId: string) => {
     setUser(user);
     setOrganizationId(organizationId);
+    setActiveProfile(null);
 
-    localStorage.setItem('sparkbot_session', JSON.stringify({ 
-      user, 
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      user,
       organizationId,
       activeProfile: null
     }));
   };
 
   const logout = () => {
-    console.log('Logging out...');
     setUser(null);
     setOrganizationId(null);
     setActiveProfile(null);
+    localStorage.removeItem(SESSION_KEY);
     localStorage.removeItem('sparktree_session');
-    
-    // Forzar la redirección al login
-    setTimeout(() => {
-      window.location.href = '/login';
-    }, 100);
+    localStorage.removeItem('sparkbot_ai_providers');
+
+    // replace evita que el botón Atrás vuelva a una ruta autenticada.
+    window.location.replace('/login');
   };
 
   const selectProfile = (profile: Profile) => {
     setActiveProfile(profile);
-    const savedSession = localStorage.getItem('sparkbot_session');
+    const savedSession = localStorage.getItem(SESSION_KEY);
     if (savedSession) {
       const parsed = JSON.parse(savedSession);
-      localStorage.setItem('sparkbot_session', JSON.stringify({ ...parsed, activeProfile: profile }));
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ ...parsed, activeProfile: profile }));
     }
   };
 
   const clearProfile = () => {
     setActiveProfile(null);
-    const savedSession = localStorage.getItem('sparkbot_session');
+    const savedSession = localStorage.getItem(SESSION_KEY);
     if (savedSession) {
       const parsed = JSON.parse(savedSession);
-      localStorage.setItem('sparkbot_session', JSON.stringify({ ...parsed, activeProfile: null }));
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ ...parsed, activeProfile: null }));
     }
   };
 
   const switchOrganization = (orgId: string) => {
     setOrganizationId(orgId);
-    const savedSession = localStorage.getItem('sparktree_session');
+    const savedSession = localStorage.getItem(SESSION_KEY);
     if (savedSession) {
       const parsed = JSON.parse(savedSession);
-      localStorage.setItem('sparktree_session', JSON.stringify({ ...parsed, organizationId: orgId }));
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ ...parsed, organizationId: orgId }));
     }
   };
 

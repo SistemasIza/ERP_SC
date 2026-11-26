@@ -4,8 +4,33 @@ import { multiWhatsAppService } from '../integrations/multiWhatsAppService';
 import { whatsappCloudService } from '../integrations/platform/whatsappCloudService';
 import { auditLogService } from '../audit/auditLogService';
 import { uploadDataUrlToChatMedia } from '../system/mediaService';
+import { getMessageChangeVersion, publishMessageChange, waitForMessageChange } from './messageEvents';
 
 const router = express.Router();
+
+const MAX_CONVERSATIONS = 200;
+const EVENT_VERSION_SEPARATOR = '|e:';
+
+const normalizeConversationChannel = (value: string): string => {
+  const channel = value.toLowerCase().trim();
+  const aliases: Record<string, string> = {
+    wa: 'whatsapp',
+    wsp: 'whatsapp',
+    ig: 'instagram',
+    tg: 'telegram',
+    facebook_messenger: 'messenger',
+    fb: 'messenger',
+    facebook: 'messenger',
+  };
+  return aliases[channel] || channel;
+};
+
+const safeSearchTerm = (value: string): string => value
+  .trim()
+  .slice(0, 80)
+  .replace(/[\\%_*,()"\n\r\t]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 // GET /api/conversations
 router.get('/', async (req, res) => {
@@ -13,145 +38,132 @@ router.get('/', async (req, res) => {
     const orgId = (req as any).organizationId;
     if (!orgId) return res.status(404).json({ error: 'Organization not found' });
 
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-    const offset = parseInt(req.query.offset as string) || 0;
-
-    // 1. Fetch conversations + contacts (with bot_state inside contacts)
-    const { data: conversations, error } = await supabase
-      .from('conversations')
-      .select('id, contact_id, last_message_at, status, assigned_to, created_at, platform_type, organization_id, contacts(phone_number, profile_name, profile_picture, custom_attributes, bot_state)')
-      .eq('organization_id', orgId)
-      .order('last_message_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-
-    if (error) {
-      console.error('[Conversations API] DB Error:', error);
-      return res.status(500).json({ error: 'Failed to fetch conversations' });
-    }
-
-    if (!conversations || conversations.length === 0) {
+    const requestedLimit = Number.parseInt(req.query.limit as string, 10);
+    const requestedOffset = Number.parseInt(req.query.offset as string, 10);
+    const limit = Math.min(Math.max(requestedLimit || 30, 1), MAX_CONVERSATIONS);
+    const offset = Math.max(requestedOffset || 0, 0);
+    const search = safeSearchTerm(String(req.query.search || ''));
+    const conversationId = String(req.query.conversationId || '');
+    if (conversationId && !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(conversationId)) {
       return res.json([]);
     }
+    const filterStatus = String(req.query.status || 'all');
+    const filterChannel = req.query.channel ? normalizeConversationChannel(String(req.query.channel)) : '';
 
-    const convIds = conversations.map((c: any) => c.id);
-    // Solo importan los mensajes recientes para hallar el último y el no-leídos;
-    // la ventana de 7 días acota el volumen descargado (estos queries se paralelizan)
-    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const numericSearch = search.replace(/\D/g, '');
+    const searchTerms = search
+      ? Array.from(new Set([
+        search,
+        ...(/^[\d\s()+.-]+$/.test(search) && numericSearch ? [numericSearch] : []),
+      ]))
+      : [];
+    const groupFilter = filterStatus === 'groups';
+    const needsContactFilter = searchTerms.length > 0 || groupFilter;
+    if (offset >= MAX_CONVERSATIONS) return res.json([]);
 
-    // 2+3+3.5. Paralelizar la carga de agentes y de mensajes (último + no-leídos)
-    const [agentsResult, messagesResult, repliedResult] = await Promise.all([
-      // Agent names
-      (async () => {
-        const assignedUserIds = Array.from(new Set(conversations.map((c: any) => c.assigned_to).filter(Boolean)));
-        const agentMap = new Map<string, any>();
-        if (assignedUserIds.length > 0) {
-          try {
-            const { data: agentsData } = await supabase
-              .from('users')
-              .select('id, name, email, avatar_url')
-              .in('id', assignedUserIds);
-            if (agentsData) {
-              agentsData.forEach((agent: any) => agentMap.set(agent.id, agent));
-            }
-          } catch (e) {
-            console.warn('[Conversations API] Failed to fetch agent info:', e);
-          }
-        }
-        return agentMap;
-      })(),
+    const repliedJoin = filterStatus === 'replied' ? 'inner' : 'left';
+    const contactJoin = needsContactFilter ? 'contacts!inner' : 'contacts';
+    const selectFields = [
+      'id, contact_id, last_message_at, status, assigned_to, created_at, platform_type, organization_id',
+      `${contactJoin}(phone_number, profile_name, profile_picture, custom_attributes, bot_state)`,
+      'assigned_agent:users!conversations_assigned_to_fkey(id, name, email, avatar_url)',
+      'latest:messages(id, content, created_at)',
+      `replied:messages!${repliedJoin}(id)`,
+    ];
+    if (filterStatus === 'unread') selectFields.push('unread:messages!inner(id)');
 
-      // 3+3.5. Una sola query devuelve, en orden descendente por fecha, los mensajes
-      // recientes de las conversaciones (acotada a 7 días). Del primer mensaje de cada
-      // conversación se obtiene el contenido del último; el no-leídos se cuentan aquí mismo.
-      (async () => {
-        const { data: msgs, error: msgsErr } = await supabase
-          .from('messages')
-          .select('conversation_id, content, status, direction')
-          .in('conversation_id', convIds)
-          .gte('created_at', since7d)
-          .order('created_at', { ascending: false })
-          .limit(2000);
-        if (msgsErr) {
-          console.warn('[Conversations API] Failed to fetch last messages:', msgsErr);
-          return { lastMsgMap: new Map<string, string>(), unreadMap: new Map<string, number>() };
-        }
-        const lastMsgMap = new Map<string, string>();
-        const unreadMap = new Map<string, number>();
-        if (msgs) {
-          for (const msg of msgs) {
-            if (!lastMsgMap.has(msg.conversation_id)) {
-              lastMsgMap.set(msg.conversation_id, msg.content);
-            }
-            if (msg.direction === 'inbound' && msg.status !== 'read') {
-              unreadMap.set(msg.conversation_id, (unreadMap.get(msg.conversation_id) || 0) + 1);
-            }
-          }
-        }
-        return { lastMsgMap, unreadMap };
-      })(),
+    const buildQuery = (rowLimit: number): any => {
+      let query = supabase
+        .from('conversations')
+        .select(selectFields.join(', '))
+        .eq('organization_id', orgId)
+        .order('last_message_at', { ascending: false, nullsFirst: false })
+        .order('id', { ascending: false })
+        .order('created_at', { referencedTable: 'latest', ascending: false })
+        .eq('replied.direction', 'inbound')
+        .limit(rowLimit)
+        .limit(1, { referencedTable: 'latest' })
+        .limit(1, { referencedTable: 'replied' });
 
-      // 3.6. ¿El contacto respondió alguna vez? Se marca la conversación si
-      // tiene al menos un mensaje entrante, sin importar su antigüedad.
-      (async () => {
-        const replied = new Set<string>();
-        const { data: inboundRows } = await supabase
-          .from('messages')
-          .select('conversation_id')
-          .in('conversation_id', convIds)
-          .eq('direction', 'inbound')
-          .limit(2000);
-        if (inboundRows) {
-          inboundRows.forEach((row: any) => replied.add(row.conversation_id));
-        }
-
-        const missing = convIds.filter((cid: string) => !replied.has(cid));
-        if (missing.length > 0) {
-          const checks = await Promise.all(missing.map(async (cid: string) => {
-            const { data } = await supabase
-              .from('messages')
-              .select('id')
-              .eq('conversation_id', cid)
-              .eq('direction', 'inbound')
-              .limit(1)
-              .maybeSingle();
-            return data ? cid : null;
-          }));
-          checks.forEach((cid) => {
-            if (cid) replied.add(cid);
-          });
-        }
-        return replied;
-      })(),
-    ]);
-
-    const agentMap = agentsResult;
-    const { lastMsgMap, unreadMap } = messagesResult;
-    const repliedSet = repliedResult;
-
-    // La consulta masiva se limita a 7 días para no descargar todo el historial.
-    // Las conversaciones cuyo último mensaje es más antiguo quedarían sin vista
-    // previa ("Sin mensajes"), así que se resuelve su último mensaje aparte.
-    const missingLastMsgIds = conversations
-      .map((c: any) => c.id)
-      .filter((cid: string) => !lastMsgMap.has(cid));
-
-    if (missingLastMsgIds.length > 0) {
-      const fallbacks = await Promise.all(missingLastMsgIds.map(async (cid: string) => {
-        const { data } = await supabase
-          .from('messages')
-          .select('conversation_id, content')
-          .eq('conversation_id', cid)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        return data;
-      }));
-      for (const row of fallbacks) {
-        if (row) lastMsgMap.set(row.conversation_id, row.content);
+      if (conversationId) query = query.eq('id', conversationId);
+      if (filterStatus === 'not_replied') query = query.is('replied.id', null);
+      if (filterStatus === 'unread') {
+        query = query
+          .eq('unread.direction', 'inbound')
+          .neq('unread.status', 'read')
+          .limit(1, { referencedTable: 'unread' });
       }
+      if (filterChannel) {
+        const channelValues: Record<string, string[]> = {
+          whatsapp: ['whatsapp', 'whatsapp_cloud'],
+          messenger: ['messenger', 'facebook_messenger', 'facebook'],
+        };
+        const values = channelValues[filterChannel] || [filterChannel];
+        query = values.length === 1 ? query.eq('platform_type', values[0]) : query.in('platform_type', values);
+      }
+      return query;
+    };
+
+    let conversations: any[] = [];
+    if (!needsContactFilter) {
+      const { data, error } = await buildQuery(limit).range(offset, offset + limit - 1);
+      if (error) {
+        console.error('[Conversations API] DB Error:', error);
+        return res.status(500).json({ error: 'Failed to fetch conversations' });
+      }
+      conversations = data || [];
+    } else {
+      const searchBranches: Array<(query: any) => any> = searchTerms.length > 0
+        ? searchTerms.flatMap(term => [
+          (query: any) => query.ilike('contacts.profile_name', `*${term}*`),
+          (query: any) => query.ilike('contacts.phone_number', `*${term}*`),
+        ])
+        : [(query: any) => query];
+      const groupBranches: Array<(query: any) => any> = groupFilter
+        ? [
+          (query: any) => query.eq('contacts.custom_attributes->>is_group', 'true'),
+          (query: any) => query.like('contacts.phone_number', '%-%'),
+        ]
+        : [(query: any) => query];
+      const branchLimit = Math.min(offset + limit, MAX_CONVERSATIONS);
+      const results = await Promise.all(searchBranches.flatMap(searchBranch =>
+        groupBranches.map(groupBranch => groupBranch(searchBranch(buildQuery(branchLimit))))
+      ));
+      const firstError = results.find((result: any) => result.error)?.error;
+      if (firstError) {
+        console.error('[Conversations API] DB Error:', firstError);
+        return res.status(500).json({ error: 'Failed to fetch conversations' });
+      }
+      const merged = new Map<string, any>();
+      for (const result of results) {
+        for (const conversation of result.data || []) merged.set(conversation.id, conversation);
+      }
+      conversations = Array.from(merged.values())
+        .sort((a, b) =>
+          new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime()
+          || b.id.localeCompare(a.id)
+        )
+        .slice(offset, offset + limit);
+    }
+    if (conversations.length === 0) return res.json([]);
+
+    const convIds = conversations.map((conversation: any) => conversation.id);
+    const { data: unreadRows, error: unreadError } = await supabase
+      .from('messages')
+      .select('conversation_id')
+      .eq('organization_id', orgId)
+      .in('conversation_id', convIds)
+      .eq('direction', 'inbound')
+      .neq('status', 'read');
+
+    if (unreadError) {
+      console.warn('[Conversations API] Failed to fetch unread counts:', unreadError);
+    }
+    const unreadMap = new Map<string, number>();
+    for (const row of unreadRows || []) {
+      unreadMap.set(row.conversation_id, (unreadMap.get(row.conversation_id) || 0) + 1);
     }
 
-    // 4. Format response
     const formattedConversations = conversations.map((conv: any) => {
       const storedPhone = conv.contacts?.phone_number || '';
       const phoneDigits = storedPhone.replace(/\D/g, '');
@@ -177,14 +189,14 @@ router.get('/', async (req, res) => {
                    (displayPhone && displayPhone.length > 15)
         },
         lastMessageAt: conv.last_message_at,
-        lastMessageContent: lastMsgMap.get(conv.id) || 'Sin mensajes',
-        hasReplied: repliedSet.has(conv.id),
+        lastMessageContent: conv.latest?.[0]?.content || 'Sin mensajes',
+        hasReplied: (conv.replied?.length || 0) > 0,
         channel: conv.platform_type || 'whatsapp',
         unreadCount: unreadMap.get(conv.id) || 0,
         status: conv.status,
         botState: conv.contacts?.bot_state || 'main_menu',
         assignedTo: conv.assigned_to,
-        assignedAgent: conv.assigned_to ? agentMap.get(conv.assigned_to) || null : null,
+        assignedAgent: conv.assigned_agent || null,
         createdAt: conv.created_at
       };
     });
@@ -196,6 +208,70 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.get('/:id/messages/updates', async (req, res) => {
+  try {
+    const orgId = (req as any).organizationId;
+    if (!orgId) return res.status(404).json({ error: 'Organization not found' });
+
+    const since = String(req.query.since || '');
+    const shouldWait = req.query.wait !== '0';
+    const waitMs = Math.min(Math.max(Number.parseInt(String(req.query.waitMs || '6000'), 10) || 6000, 1000), 6500);
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.on('close', onClose);
+    res.setHeader('Cache-Control', 'no-store');
+
+    const getSnapshot = async () => {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('id, status, created_at')
+        .eq('conversation_id', req.params.id)
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      const baseVersion = data ? `${data.created_at}|${data.id}|${data.status || ''}` : '';
+      const eventVersion = getMessageChangeVersion(orgId, req.params.id);
+      const version = baseVersion || eventVersion
+        ? `${baseVersion}${EVENT_VERSION_SEPARATOR}${eventVersion}`
+        : '';
+      return { version, baseVersion, eventVersion, latest: data || null };
+    };
+
+    try {
+      const waiting = shouldWait
+        ? waitForMessageChange(orgId, req.params.id, waitMs, controller.signal)
+        : Promise.resolve<'timeout'>('timeout');
+      let snapshot = await getSnapshot();
+      const eventIndex = since.lastIndexOf(EVENT_VERSION_SEPARATOR);
+      const sinceMessageVersion = eventIndex >= 0 ? since.slice(0, eventIndex) : since;
+      const sinceEventVersion = eventIndex >= 0 ? Number(since.slice(eventIndex + EVENT_VERSION_SEPARATOR.length)) : snapshot.eventVersion;
+      let changed = snapshot.baseVersion !== sinceMessageVersion || snapshot.eventVersion !== sinceEventVersion;
+
+      if (!changed && shouldWait) {
+        const reason = await waiting;
+        if (reason === 'event') {
+          snapshot = await getSnapshot();
+          changed = true;
+        }
+      }
+
+      if (controller.signal.aborted) return;
+      res.json({ changed, version: snapshot.version, latest: snapshot.latest });
+    } finally {
+      controller.abort();
+      res.off('close', onClose);
+    }
+  } catch (error) {
+    if (!(req as any).aborted) {
+      console.error('[Conversations] Message update check failed:', error);
+      res.status(500).json({ error: 'Failed to check message updates' });
+    }
+  }
+});
+
 // GET /api/conversations/:id/messages
 router.get('/:id/messages', async (req, res) => {
   try {
@@ -204,14 +280,17 @@ router.get('/:id/messages', async (req, res) => {
 
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
+    const eventVersion = getMessageChangeVersion(orgId, req.params.id);
 
-    const { data: messages } = await supabase
+    const { data: messages, error: messagesError } = await supabase
       .from('messages')
       .select('id, content, created_at, direction, type, status')
       .eq('conversation_id', req.params.id)
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .range(offset, offset + limit - 1);
+    if (messagesError) throw messagesError;
 
     // Return in chronological order
     const formattedMessages = (messages || []).reverse().map((msg: any) => ({
@@ -223,25 +302,81 @@ router.get('/:id/messages', async (req, res) => {
       status: msg.status
     }));
 
-    // The agent is viewing this conversation → mark its inbound messages as read
-    // so the "No leídos" count clears (fire-and-forget, non-blocking).
-    void (async () => {
-      try {
-        await supabase
-          .from('messages')
-          .update({ status: 'read' })
-          .eq('conversation_id', req.params.id)
-          .eq('organization_id', orgId)
-          .eq('direction', 'inbound')
-          .neq('status', 'read');
-      } catch (e: any) {
-        console.warn('[Conversations] Failed to mark messages as read:', e?.message);
-      }
-    })();
+    if (req.query.markRead !== 'false') {
+      void (async () => {
+        try {
+          await supabase
+            .from('messages')
+            .update({ status: 'read' })
+            .eq('conversation_id', req.params.id)
+            .eq('organization_id', orgId)
+            .eq('direction', 'inbound')
+            .neq('status', 'read');
+        } catch (e: any) {
+          console.warn('[Conversations] Failed to mark messages as read:', e?.message);
+        }
+      })();
+    }
 
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Message-Event-Version', String(eventVersion));
     res.json(formattedMessages);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// PUT /api/conversations/:id/tags — update tags for the conversation contact
+router.put('/:id/tags', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const orgId = (req as any).organizationId;
+    if (!orgId) return res.status(404).json({ error: 'Organization not found' });
+
+    const rawTags = Array.isArray(req.body?.tags) ? req.body.tags : null;
+    if (!rawTags) return res.status(400).json({ error: 'tags debe ser un arreglo' });
+
+    const safeTags = Array.from(
+      new Set(rawTags.map((t: any) => String(t ?? '').trim()).filter(Boolean))
+    ).slice(0, 20);
+
+    const { data: conversation, error: convError } = await supabase
+      .from('conversations')
+      .select('id, contact_id, contacts(custom_attributes)')
+      .eq('id', id)
+      .eq('organization_id', orgId)
+      .single();
+
+    if (convError || !conversation?.contact_id) {
+      return res.status(404).json({ error: 'Conversación no encontrada' });
+    }
+
+    const currentAttributes = (conversation as any)?.contacts?.custom_attributes || {};
+    const { data: updatedContact, error: updateError } = await supabase
+      .from('contacts')
+      .update({
+        custom_attributes: { ...currentAttributes, tags: safeTags },
+        last_active_at: new Date().toISOString(),
+      })
+      .eq('id', conversation.contact_id)
+      .eq('organization_id', orgId)
+      .select('id, custom_attributes')
+      .single();
+
+    if (updateError) {
+      console.error('[Conversations] Error updating tags:', updateError);
+      return res.status(500).json({ error: 'No se pudieron actualizar las etiquetas' });
+    }
+
+    res.json({
+      success: true,
+      tags: Array.isArray(updatedContact?.custom_attributes?.tags)
+        ? updatedContact.custom_attributes.tags
+        : safeTags,
+    });
+  } catch (error) {
+    console.error('[Conversations] Error updating tags:', error);
+    res.status(500).json({ error: 'Failed to update tags' });
   }
 });
 
@@ -524,6 +659,8 @@ router.post('/:id/send', async (req, res) => {
       .eq('id', id)
       .eq('organization_id', orgId);
 
+    publishMessageChange({ organizationId: orgId, conversationId: id, messageId: savedMessage?.id });
+
     // El agente respondió → marcar inbound como leídos (fire-and-forget)
     void (async () => {
       try {
@@ -697,7 +834,7 @@ router.post('/start', async (req, res) => {
 
     // Guardar el mensaje enviado
     if (conversation) {
-      await supabase.from('messages').insert({
+      const { error: messageError } = await supabase.from('messages').insert({
         organization_id: orgId,
         conversation_id: conversation.id,
         contact_id: contact.id,
@@ -707,11 +844,13 @@ router.post('/start', async (req, res) => {
         content: messageContent,
         status: 'sent',
       });
+      if (messageError) throw messageError;
 
       await supabase
         .from('conversations')
         .update({ last_message_at: new Date().toISOString() })
         .eq('id', conversation.id);
+      publishMessageChange({ organizationId: orgId, conversationId: conversation.id });
     }
 
     res.json({

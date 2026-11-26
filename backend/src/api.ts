@@ -141,7 +141,8 @@ if (process.env.FRONTEND_URL) {
 
 app.use(cors({
   origin: allowedOrigins,
-  credentials: true
+  credentials: true,
+  exposedHeaders: ['X-Message-Event-Version']
 }));
 
 // Security headers (helmet) + custom hardening
@@ -168,7 +169,15 @@ app.use((req, res, next) => {
 
 // 25mb: los adjuntos viajan como base64 (≈33% más que el binario) y WhatsApp
 // permite media de hasta 16 MB.
-app.use(express.json({ limit: '25mb' }));
+// Capturamos rawBody para validar firmas HMAC de webhooks (Meta/WhatsApp).
+app.use(express.json({
+  limit: '25mb',
+  verify: (req: any, _res, buf) => {
+    if (req.originalUrl?.startsWith('/api/webhook') || req.originalUrl?.startsWith('/api/webhooks')) {
+      req.rawBody = buf;
+    }
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Prevention of ERR_HTTP_HEADERS_SENT after timeout

@@ -13,6 +13,7 @@ import ffmpegStaticPath from 'ffmpeg-static';
 import { BasePlatformService, PlatformConnection, PlatformMessage, PlatformServiceAdapter } from './basePlatformService';
 import { supabase } from '../../../core/config/supabase';
 import { handleIncomingMessage } from '../../bots/engine/flow-core';
+import { publishMessageChange } from '../../chat/messageEvents';
 
 // Binario de ffmpeg: variable de entorno, binario empaquetado (ffmpeg-static)
 // o el del sistema. Sin ffmpeg no se puede generar el ogg/opus que WhatsApp
@@ -209,21 +210,34 @@ config: {
       else if (message.type === 'document') messageType = 'document';
       else if (message.type === 'audio') messageType = 'audio';
 
-      await supabase.from('messages').insert({
-        organization_id: connection.organizationId,
-        conversation_id: conversation.id,
-        contact_id: contact.id,
-        direction: 'inbound',
-        type: messageType,
-        content: messageContent,
-        whatsapp_message_id: message.id,
-      });
+      const { data: savedMessage, error: messageError } = await supabase
+        .from('messages')
+        .insert({
+          organization_id: connection.organizationId,
+          conversation_id: conversation.id,
+          contact_id: contact.id,
+          direction: 'inbound',
+          type: messageType,
+          content: messageContent,
+          whatsapp_message_id: message.id,
+        })
+        .select('id')
+        .single();
+      if (messageError) {
+        console.error('[WhatsApp Cloud] Error saving incoming message:', messageError);
+        return;
+      }
 
       // Update conversation timestamp
       await supabase
         .from('conversations')
         .update({ last_message_at: new Date().toISOString() })
         .eq('id', conversation.id);
+      publishMessageChange({
+        organizationId: connection.organizationId,
+        conversationId: conversation.id,
+        messageId: savedMessage?.id || message.id,
+      });
 
       // Process with flow engine
       // Detect numeric button responses: when the user sends a plain number

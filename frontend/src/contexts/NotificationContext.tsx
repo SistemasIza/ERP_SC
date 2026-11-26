@@ -199,6 +199,7 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
     let lastLatestMessageTime: string | null = null;
     let interval: ReturnType<typeof setInterval> | undefined;
     let stopped = false;
+    let checking = false;
 
     const stopPolling = () => {
       stopped = true;
@@ -215,15 +216,15 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
      * - Crea notificaciones para nuevos mensajes
      */
     const checkNewMessages = async () => {
-      if (stopped || !user) return;
+      if (stopped || checking || !user || document.hidden) return;
+      checking = true;
       try {
-        // Obtener leads para filtrado
-        const responseLeads = await getLeads().catch(() => []);
+        const [responseLeads, convs] = await Promise.all([
+          getLeads().catch(() => []),
+          getConversations({ limit: 50 }),
+        ]);
         const leads = Array.isArray(responseLeads) ? responseLeads : [];
         const leadPhones = new Set(leads.map((l: any) => l.phone_number || l.phone));
-
-        // Obtener conversaciones
-        const convs = await getConversations();
 
         if (convs && convs.length > 0) {
           const latestConv = convs[0];
@@ -308,12 +309,13 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
         } else {
           console.error('Error checking new messages:', error);
         }
+      } finally {
+        checking = false;
       }
     };
 
-    // Configurar verificación periódica (cada 30 segundos para reducir carga del servidor)
-    interval = startPolling();
-    checkNewMessages(); // Verificación inicial
+    if (!document.hidden) interval = startPolling();
+    checkNewMessages();
 
     const onVisibility = () => {
       if (document.hidden) {
@@ -328,6 +330,7 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
 
     // Cleanup al desmontar o al cambiar el usuario (login/logout)
     return () => {
+      stopped = true;
       if (interval) clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibility);
     };

@@ -4,6 +4,7 @@ import { handleIncomingMessage } from '../bots/engine/flow-core';
 import { supabase } from '../../core/config/supabase';
 import WhatsAppService from '../integrations/whatsappService';
 import { persistCloudMediaMessage, buildLocationContent, isMediaMessageType } from './mediaService';
+import { publishMessageChange } from '../chat/messageEvents';
 
 /**
  * Validates X-Hub-Signature-256 HMAC signature from Meta.
@@ -19,7 +20,12 @@ function verifySignature(req: Request): boolean {
     return true; // Allow if not configured (dev mode), but warn
   }
 
-  const payload = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+  const rawBody = (req as any).rawBody;
+  const payload = Buffer.isBuffer(rawBody)
+    ? rawBody
+    : typeof req.body === 'string'
+      ? req.body
+      : JSON.stringify(req.body);
   const expected = 'sha256=' + crypto.createHmac('sha256', appSecret).update(payload).digest('hex');
 
   // Constant-time comparison to prevent timing attacks
@@ -150,7 +156,7 @@ async function processChange(changeValue: any) {
             // tardío de Meta con un estado anterior no debe quitar el doble check azul.
             const { data: existing } = await supabase
               .from('messages')
-              .select('status')
+              .select('id, conversation_id, organization_id, status')
               .eq('whatsapp_message_id', status.id)
               .limit(1)
               .maybeSingle();
@@ -165,6 +171,14 @@ async function processChange(changeValue: any) {
                 .from('messages')
                 .update({ status: dbStatus })
                 .eq('whatsapp_message_id', status.id);
+
+              if (existing?.organization_id && existing?.conversation_id) {
+                publishMessageChange({
+                  organizationId: existing.organization_id,
+                  conversationId: existing.conversation_id,
+                  messageId: existing.id,
+                });
+              }
 
               // Cruza el estado de entrega con los contactos de recordatorios (por wamid).
               // Se mantiene 'status' como envío (sent) y se registran delivered_at/read_at;
@@ -259,23 +273,38 @@ async function processIncomingMessage(message: any, changeValue: any) {
       }
     }
 
+    if (message.id) {
+      const { data: existing } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('whatsapp_message_id', message.id)
+        .limit(1)
+        .maybeSingle();
+      if (existing) {
+        console.log(`[Webhook] Duplicate message ${message.id} — skipping`);
+        return;
+      }
+    }
+
     // Lookup organization by phone number ID
     let { data: organization } = await supabase
       .from('organizations')
       .select('*')
       .eq('whatsapp_phone_number_id', receivingPhoneId)
       .single();
+    let cloudConnection: any = null;
 
     // Fallback: lookup via platform_connections (Cloud API stores phone_number_id there)
     if (!organization) {
       const { data: platformConn } = await supabase
         .from('platform_connections')
-        .select('organization_id')
+        .select('*')
         .eq('platform_type', 'whatsapp')
         .eq('platform_account_id', receivingPhoneId)
         .eq('status', 'connected')
         .single();
 
+      cloudConnection = platformConn || null;
       if (platformConn?.organization_id) {
         const { data: org } = await supabase
           .from('organizations')
@@ -324,21 +353,21 @@ async function processIncomingMessage(message: any, changeValue: any) {
     let platformConnectionId: string | null = null;
     let cloudAccessToken: string | null = null;
 
-    // Detect Cloud API from platform_connections
-    {
+    if (!cloudConnection) {
       const { data: platformConn } = await supabase
         .from('platform_connections')
-        .select('id, config, platform_account_id')
+        .select('*')
         .eq('organization_id', organization.id)
         .eq('platform_type', 'whatsapp')
         .eq('platform_account_id', receivingPhoneId)
         .eq('status', 'connected')
         .single();
-      if (platformConn) {
-        connectionMethod = 'cloud';
-        platformConnectionId = platformConn.id;
-        cloudAccessToken = platformConn.config?.access_token || null;
-      }
+      cloudConnection = platformConn || null;
+    }
+    if (cloudConnection) {
+      connectionMethod = 'cloud';
+      platformConnectionId = cloudConnection.id;
+      cloudAccessToken = cloudConnection.config?.access_token || null;
     }
 
     if (!conversation) {
@@ -368,21 +397,6 @@ async function processIncomingMessage(message: any, changeValue: any) {
         .from('conversations')
         .update(updateData)
         .eq('id', conversation.id);
-    }
-
-    // Save Incoming Message (with deduplication)
-    if (message.id) {
-      const { data: existing } = await supabase
-        .from('messages')
-        .select('id')
-        .eq('whatsapp_message_id', message.id)
-        .limit(1)
-        .maybeSingle();
-
-      if (existing) {
-        console.log(`[Webhook] Duplicate message ${message.id} — skipping`);
-        return;
-      }
     }
 
     // Normalize the message content/type so it passes the `messages.type` CHECK
@@ -426,14 +440,28 @@ async function processIncomingMessage(message: any, changeValue: any) {
       storedContent = buildLocationContent(message) || messageContent;
     }
 
-    await supabase.from('messages').insert({
-      organization_id: organization.id,
-      conversation_id: conversation?.id,
-      contact_id: contact.id,
-      direction: 'inbound',
-      type: messageType,
-      content: typeof storedContent === 'string' ? storedContent : JSON.stringify(storedContent),
-      whatsapp_message_id: message.id
+    const { data: savedMessage, error: messageError } = await supabase
+      .from('messages')
+      .insert({
+        organization_id: organization.id,
+        conversation_id: conversation?.id,
+        contact_id: contact.id,
+        direction: 'inbound',
+        type: messageType,
+        content: typeof storedContent === 'string' ? storedContent : JSON.stringify(storedContent),
+        whatsapp_message_id: message.id
+      })
+      .select('id')
+      .single();
+
+    if (messageError || !conversation?.id) {
+      console.error('[Webhook] Error saving incoming message:', messageError);
+      return;
+    }
+    publishMessageChange({
+      organizationId: organization.id,
+      conversationId: conversation.id,
+      messageId: savedMessage?.id || message.id,
     });
 
     // Process bot flow
@@ -447,19 +475,10 @@ async function processIncomingMessage(message: any, changeValue: any) {
     let waService;
 
     if (connectionMethod === 'cloud') {
-      const { data: platformConn } = await supabase
-        .from('platform_connections')
-        .select('*')
-        .eq('organization_id', organization.id)
-        .eq('platform_type', 'whatsapp')
-        .eq('platform_account_id', receivingPhoneId)
-        .eq('status', 'connected')
-        .single();
-
-      if (platformConn) {
+      if (cloudConnection) {
         const { whatsappCloudService } = await import('../integrations/platform/whatsappCloudService');
-        await whatsappCloudService.initializeConnection(platformConn);
-        const cloudConn = whatsappCloudService['connections'].get(platformConn.id);
+        await whatsappCloudService.initializeConnection(cloudConnection);
+        const cloudConn = whatsappCloudService['connections'].get(cloudConnection.id);
         if (cloudConn) {
           waService = whatsappCloudService.createServiceAdapter(cloudConn);
         }

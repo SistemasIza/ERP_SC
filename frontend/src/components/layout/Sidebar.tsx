@@ -253,7 +253,7 @@ export const Sidebar = ({ onCollapsedChange, isMobileOpen, onMobileClose }: Side
         {(!collapsed || mobile) && (
           <div className="overflow-hidden flex-1 min-w-0">
             <h1 className="text-sm font-black text-slate-900 dark:text-white leading-none tracking-tight whitespace-nowrap">
-              Grupos SC
+              CRM GSC
             </h1>
             <p className="text-[9px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-[0.15em] whitespace-nowrap mt-1">
               Admin Suite

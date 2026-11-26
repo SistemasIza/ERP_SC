@@ -67,8 +67,8 @@ export const TikTokConfig = () => {
       addNotification({ type: 'success', title: 'TikTok conectado', message: 'La cuenta de TikTok se conectó correctamente.' });
       setData({
         businessAccountId: 'tb_789012345',
-        username: 'sparkbot_oficial',
-        displayName: 'SparkBot Business',
+        username: 'crmgsc_oficial',
+        displayName: 'CRM GSC Business',
         profilePicUrl: '',
         status: 'connected',
         connectedAt: new Date().toISOString(),

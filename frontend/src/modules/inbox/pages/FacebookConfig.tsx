@@ -26,9 +26,9 @@ interface MessengerData {
 }
 
 const mockPages = [
-  { id: 'pg_001', name: 'Página Oficial SparkBot', profilePic: '' },
-  { id: 'pg_002', name: 'SparkBot Atención al Cliente', profilePic: '' },
-  { id: 'pg_003', name: 'SparkBot Promociones', profilePic: '' },
+  { id: 'pg_001', name: 'Página Oficial CRM GSC', profilePic: '' },
+  { id: 'pg_002', name: 'CRM GSC Atención al Cliente', profilePic: '' },
+  { id: 'pg_003', name: 'CRM GSC Promociones', profilePic: '' },
 ];
 
 const prerequisites = [

@@ -114,7 +114,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation();
 
   if (loading) return <PageLoader sectionName="Panel" isInitial />;
-  if (!user) return <Navigate to="/login" />;
+  if (!user) return <Navigate to="/login" replace />;
 
   // Bloqueo por rol: si la ruta no está permitida, redirigir a la vista base del rol
   if (!hasRouteAccess(user.role, location.pathname)) {

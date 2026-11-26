@@ -16,6 +16,7 @@ import { messageQueueService } from '../../shared/services/messageQueueService';
 import { uploadChatMedia } from '../system/mediaService';
 import { convertToOggOpus } from './platform/whatsappCloudService';
 import { io } from '../../api';
+import { publishMessageChange } from '../chat/messageEvents';
 
 interface WhatsAppConnection {
   id: string;
@@ -382,7 +383,8 @@ export class MultiWhatsAppService {
 
       // Save to history
       const profileName = msg.pushName || '';
-      const { contact, conversation } = await this.saveMessageData(formattedMessage, senderPhone, connection, null, profileName);
+      const { contact, conversation, duplicate } = await this.saveMessageData(formattedMessage, senderPhone, connection, null, profileName);
+      if (duplicate) return;
 
       // Process message through bot engine
       const organizationConfig = {
@@ -603,7 +605,18 @@ export class MultiWhatsAppService {
     return formattedMessage;
   }
 
-  private async saveMessageData(message: any, senderPhone: string, connection: WhatsAppConnection, flow: any, profileName: string = ''): Promise<{ contact: any, conversation: any }> {
+  private async saveMessageData(message: any, senderPhone: string, connection: WhatsAppConnection, flow: any, profileName: string = ''): Promise<{ contact: any, conversation: any, duplicate?: boolean }> {
+    if (message.id) {
+      const { data: existing } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('organization_id', connection.organizationId)
+        .eq('whatsapp_message_id', message.id)
+        .limit(1)
+        .maybeSingle();
+      if (existing) return { contact: null, conversation: null, duplicate: true };
+    }
+
     // Similar to existing logic but using connection-specific organization
     const isGroup = (message.jid || '').includes('@g.us');
     const messageJid = message.jid || (senderPhone ? `${senderPhone}@s.whatsapp.net` : '');
@@ -708,20 +721,30 @@ export class MultiWhatsAppService {
       ? (message.media?.type || 'document')
       : message.type === 'sticker' ? 'image' : message.type;
 
-    await supabase.from('messages').insert({
-      organization_id: connection.organizationId,
-      conversation_id: conversation.id,
-      contact_id: contact.id,
-      direction: 'inbound',
-      type: dbType,
-      content: JSON.stringify(message),
-      whatsapp_message_id: message.id
-    });
+    const { data: savedMessage, error: messageError } = await supabase
+      .from('messages')
+      .insert({
+        organization_id: connection.organizationId,
+        conversation_id: conversation.id,
+        contact_id: contact.id,
+        direction: 'inbound',
+        type: dbType,
+        content: JSON.stringify(message),
+        whatsapp_message_id: message.id
+      })
+      .select('id')
+      .single();
+    if (messageError) throw messageError;
 
     await supabase
       .from('conversations')
       .update({ last_message_at: new Date().toISOString() })
       .eq('id', conversation.id);
+    publishMessageChange({
+      organizationId: connection.organizationId,
+      conversationId: conversation.id,
+      messageId: savedMessage?.id || message.id,
+    });
 
     return { contact, conversation };
   }

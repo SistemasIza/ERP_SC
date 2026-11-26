@@ -2,6 +2,7 @@ import WhatsAppService from '../../../integrations/whatsappService';
 import { supabase } from '../../../../core/config/supabase';
 import axios from 'axios';
 import { executeRAGNode } from '../../../../automation/nodes/knowledge/rag.node';
+import { publishMessageChange } from '../../../chat/messageEvents';
 
 const PHONE_VAR_KEYWORDS = ['telefono', 'phone', 'celular'];
 
@@ -69,22 +70,33 @@ export async function handleIncomingMessage(
 
   const saveOutgoingMessage = async (type: string, content: any, waResponse: any) => {
     if (organizationConfig.conversationId && organizationConfig.contactId) {
-      const { error } = await supabase.from('messages').insert({
-        organization_id: organizationConfig.organizationId,
-        conversation_id: organizationConfig.conversationId,
-        contact_id: organizationConfig.contactId,
-        direction: 'outbound',
-        type: type,
-        content: typeof content === 'string' ? content : JSON.stringify(content),
-        status: 'sent',
-        whatsapp_message_id: waResponse?.key?.id
-      });
+      const { data: savedMessage, error } = await supabase
+        .from('messages')
+        .insert({
+          organization_id: organizationConfig.organizationId,
+          conversation_id: organizationConfig.conversationId,
+          contact_id: organizationConfig.contactId,
+          direction: 'outbound',
+          type: type,
+          content: typeof content === 'string' ? content : JSON.stringify(content),
+          status: 'sent',
+          whatsapp_message_id: waResponse?.key?.id || waResponse?.messages?.[0]?.id || waResponse?.id
+        })
+        .select('id')
+        .single();
       if (error) console.error('[Flow Engine] Error saving outbound message:', error);
 
       await supabase
         .from('conversations')
         .update({ last_message_at: new Date().toISOString() })
         .eq('id', organizationConfig.conversationId);
+      if (!error && organizationConfig.organizationId) {
+        publishMessageChange({
+          organizationId: organizationConfig.organizationId,
+          conversationId: organizationConfig.conversationId,
+          messageId: savedMessage?.id,
+        });
+      }
     }
   };
 

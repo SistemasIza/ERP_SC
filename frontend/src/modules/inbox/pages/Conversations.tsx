@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getConversations, getConversationMessages, deleteConversation, deleteUser, getCatalogs, getTeamUsers, assignAgentToConversation } from '../../../services/api';
+import { getConversations, getConversationMessages, getConversationMessageUpdates, deleteConversation, deleteUser, getCatalogs, getTeamUsers, assignAgentToConversation, updateConversationTags } from '../../../services/api';
 import api from '../../../services/api';
 import {
-  Check, CheckCheck, Send, Search, Filter, Users, MoreVertical, Smile, Paperclip, Mic, Star, MessageCircle, Trash2, ChevronLeft, ChevronRight, ChevronDown, Store, Package, X, Bell, BellOff, Shield, Plus, Cloud, QrCode, Bot, User, MapPin, Download, Sticker, Camera, Video
+  Check, CheckCheck, Send, Search, Filter, Users, MoreVertical, Smile, Paperclip, Mic, Star, MessageCircle, Trash2, ChevronLeft, ChevronRight, ChevronDown, Store, Package, X, Bell, BellOff, Shield, Plus, Cloud, QrCode, Bot, User, MapPin, Download, Sticker, Camera, Video, Tag
 } from 'lucide-react';
 import { FaWhatsapp, FaTelegram, FaInstagram, FaFacebookMessenger, FaTiktok } from 'react-icons/fa';
 import { PageLoader } from '../../../components/layout/PageLoader';
@@ -15,6 +15,83 @@ import { useNotifications } from '../../../contexts/NotificationContext';
 
 const CONVERSATIONS_PAGE_SIZE = 30;
 const MAX_CONVERSATIONS = 200;
+
+const escapeHtml = (value: string) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;');
+
+const formatMessageText = (text: string, searchTerm: string) => {
+  let html: string;
+  if (!searchTerm) {
+    html = escapeHtml(text);
+  } else {
+    const escapedTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    html = text.split(new RegExp(`(${escapedTerm})`, 'gi')).map(part =>
+      part.toLowerCase() === searchTerm.toLowerCase()
+        ? `<mark class="bg-amber-300 text-gray-900 rounded-sm px-0.5">${escapeHtml(part)}</mark>`
+        : escapeHtml(part)
+    ).join('');
+  }
+  return html
+    .replace(/\*\*(.+?)\*\*/g, '<strong class="font-extrabold">$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
+    .replace(/~~(.+?)~~/g, '<span class="line-through">$1</span>')
+    .replace(/`(.+?)`/g, '<code class="bg-black/10 dark:bg-white/10 px-1 rounded text-[11px] font-mono">$1</code>')
+    .replace(/\n/g, '<br />');
+};
+
+const MessageStatus = ({ status }: { status?: string }) => {
+  const statusColors: Record<string, string> = {
+    sending: 'text-gray-300 dark:text-gray-600',
+    sent: 'text-gray-400 dark:text-gray-500',
+    delivered: 'text-gray-400 dark:text-gray-500',
+    read: 'text-[#53bdeb]',
+    error: 'text-red-500 dark:text-red-400',
+  };
+  const color = statusColors[status || 'sent'] || statusColors.sent;
+  const label = status === 'read' ? 'Leído'
+    : status === 'delivered' ? 'Entregado'
+    : status === 'error' ? 'Error'
+    : status === 'sending' ? 'Enviando'
+    : 'Enviado';
+
+  if (status === 'error') return <span title={label} className={`text-[9px] font-bold ${color}`}>Error</span>;
+  if (status === 'sending') return <span title={label} className={`text-[9px] font-bold ${color}`}>...</span>;
+  if (status === 'read' || status === 'delivered') {
+    return <span title={label} className="inline-flex"><CheckCheck className={`w-4 h-4 ${color}`} aria-label={label} /></span>;
+  }
+  return <span title={label} className="inline-flex"><Check className={`w-3.5 h-3.5 ${color}`} aria-label={label} /></span>;
+};
+
+const PreviewIcon = ({ kind }: { kind: 'image' | 'video' | 'audio' | 'document' | 'location' | 'sticker' | 'contact' | null }) => {
+  if (!kind) return null;
+  const Icon = kind === 'image' ? Camera
+    : kind === 'video' ? Video
+    : kind === 'audio' ? Mic
+    : kind === 'document' ? Paperclip
+    : kind === 'location' ? MapPin
+    : kind === 'sticker' ? Sticker
+    : User;
+  return <Icon className="w-3 h-3 shrink-0" />;
+};
+
+const BotStatusIndicator = ({ conv, sizeClass = 'w-3.5 h-3.5' }: { conv: any; sizeClass?: string }) => {
+  const state = conv?.contactId?.bot_state || conv?.contactId?.botState || conv?.botState;
+  const status = state === 'handoff' ? 'handoff' : typeof state === 'string' && state.startsWith('capture_') ? 'capture' : 'active';
+  const icon = status === 'handoff' ? <User className={`${sizeClass} text-red-500`} />
+    : status === 'capture' ? <Bot className={`${sizeClass} text-red-500`} />
+    : <Bot className={`${sizeClass} text-yellow-400`} />;
+  const label = status === 'handoff' ? 'Agente humano atendiendo' : status === 'capture' ? 'Bot en pausa' : 'Bot atendiendo';
+  return (
+    <span className="relative group inline-flex items-center shrink-0">
+      {icon}
+      <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-50 whitespace-nowrap bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-[9px] font-bold px-2 py-1 rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        {label}
+      </span>
+    </span>
+  );
+};
 
 type TemplateVariable = {
   key: string;
@@ -149,9 +226,12 @@ export const Conversations = () => {
   const [loading, setLoading] = useState(true);
   const [messageText, setMessageText] = useState('');
   const [sending, setSending] = useState(false);
+  const [tagInput, setTagInput] = useState('');
+  const [savingTags, setSavingTags] = useState(false);
   const [whatsappConnections, setWhatsappConnections] = useState<{ id: string; display_name: string }[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterChannel, setFilterChannel] = useState('all');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -160,7 +240,14 @@ export const Conversations = () => {
   const [hasMoreConversations, setHasMoreConversations] = useState(true);
   const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
   const conversationsRef = useRef<any[]>([]);
+  const nextConversationOffsetRef = useRef(0);
   const loadingMoreRef = useRef(false);
+  const loadingListRef = useRef(false);
+  const listRequestRef = useRef<AbortController | null>(null);
+  const loadMoreRequestRef = useRef<AbortController | null>(null);
+  const listRequestIdRef = useRef(0);
+  const loadMoreRequestIdRef = useRef(0);
+  const lastConversationsHash = useRef('');
 
   // Catalog integration state
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
@@ -175,6 +262,7 @@ export const Conversations = () => {
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const lastMessagesLength = useRef(0);
+  const messageVersionRef = useRef('');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -264,55 +352,100 @@ export const Conversations = () => {
     }
   };
 
-  const fetchConversationsList = async () => {
-    // Lista continua estilo WhatsApp Web: se pide al menos una página y se
-    // conservan las que el usuario ya cargó al hacer scroll.
-    const limit = Math.min(Math.max(CONVERSATIONS_PAGE_SIZE, conversationsRef.current.length), MAX_CONVERSATIONS);
-    try {
-      const data = await getConversations({ limit, offset: 0 });
-      const conversationsArray = Array.isArray(data) ? data : [];
+  const conversationQuery = useMemo(() => ({
+    limit: CONVERSATIONS_PAGE_SIZE,
+    search: debouncedSearch || undefined,
+    status: filterStatus,
+    channel: filterChannel === 'all' ? undefined : filterChannel,
+  }), [debouncedSearch, filterStatus, filterChannel]);
 
-      const newHash = JSON.stringify(conversationsArray.map((c: any) => ({ id: c._id, last: c.lastMessageAt, unread: c.unreadCount, replied: c.hasReplied })));
-      if (newHash === lastConversationsHash.current && lastConversationsHash.current !== '') {
+  const fetchConversationsList = useCallback(async (force = false) => {
+    if (loadingListRef.current && !force) return;
+    listRequestRef.current?.abort();
+    const requestId = ++listRequestIdRef.current;
+    const controller = new AbortController();
+    listRequestRef.current = controller;
+    loadingListRef.current = true;
+
+    try {
+      const data = await getConversations({ ...conversationQuery, offset: 0 }, controller.signal);
+      if (controller.signal.aborted || requestId !== listRequestIdRef.current) return;
+      const page = Array.isArray(data) ? data : [];
+      nextConversationOffsetRef.current = page.length;
+      const newHash = JSON.stringify(page.map((conversation: any) => [
+        conversation._id,
+        conversation.lastMessageAt,
+        conversation.lastMessageContent,
+        conversation.unreadCount,
+        conversation.hasReplied,
+        conversation.status,
+        conversation.botState,
+        conversation.assignedTo,
+        conversation.contactId?.name,
+        conversation.contactId?.tags,
+      ]));
+
+      if (!force && newHash === lastConversationsHash.current) {
         setLoading(false);
         return;
       }
       lastConversationsHash.current = newHash;
-
-      setConversations(conversationsArray);
-      setHasMoreConversations(conversationsArray.length >= limit && limit < MAX_CONVERSATIONS);
-    } catch (err) {
-      console.error('Failed to load conversations', err);
-      setConversations([]);
+      setConversations(current => {
+        const merged = new Map(current.map(conversation => [conversation._id, conversation]));
+        page.forEach(conversation => merged.set(conversation._id, conversation));
+        return Array.from(merged.values()).sort((a, b) =>
+          new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime()
+        );
+      });
+      setHasMoreConversations(page.length === CONVERSATIONS_PAGE_SIZE && nextConversationOffsetRef.current < MAX_CONVERSATIONS);
+    } catch (error: any) {
+      if (error?.name !== 'CanceledError' && error?.code !== 'ERR_CANCELED') {
+        console.error('Failed to load conversations', error);
+      }
     } finally {
-      setLoading(false);
+      if (requestId === listRequestIdRef.current) {
+        loadingListRef.current = false;
+        setLoading(false);
+      }
     }
-  };
+  }, [conversationQuery]);
 
-  const loadMoreConversations = async () => {
-    if (loadingMoreRef.current || !hasMoreConversations) return;
-    const currentLength = conversationsRef.current.length;
-    const nextLimit = Math.min(currentLength + CONVERSATIONS_PAGE_SIZE, MAX_CONVERSATIONS);
-    if (nextLimit <= currentLength) {
+  const loadMoreConversations = useCallback(async () => {
+    if (loadingListRef.current || loadingMoreRef.current || !hasMoreConversations) return;
+    const offset = nextConversationOffsetRef.current;
+    if (offset >= MAX_CONVERSATIONS) {
       setHasMoreConversations(false);
       return;
     }
 
+    loadMoreRequestRef.current?.abort();
+    const requestId = ++loadMoreRequestIdRef.current;
+    const controller = new AbortController();
+    loadMoreRequestRef.current = controller;
     loadingMoreRef.current = true;
     setLoadingMoreConversations(true);
     try {
-      const data = await getConversations({ limit: nextLimit, offset: 0 });
-      const conversationsArray = Array.isArray(data) ? data : [];
-      setConversations(conversationsArray);
-      lastConversationsHash.current = JSON.stringify(conversationsArray.map((c: any) => ({ id: c._id, last: c.lastMessageAt, unread: c.unreadCount, replied: c.hasReplied })));
-      setHasMoreConversations(conversationsArray.length >= nextLimit && nextLimit < MAX_CONVERSATIONS);
-    } catch (err) {
-      console.error('Failed to load more conversations', err);
+      const data = await getConversations({ ...conversationQuery, offset }, controller.signal);
+      if (controller.signal.aborted || requestId !== loadMoreRequestIdRef.current) return;
+      const page = Array.isArray(data) ? data : [];
+      setConversations(current => {
+        const seen = new Set(current.map(conversation => conversation._id));
+        return [...current, ...page.filter(conversation => !seen.has(conversation._id))];
+      });
+      const nextOffset = offset + page.length;
+      nextConversationOffsetRef.current = nextOffset;
+      setHasMoreConversations(page.length === CONVERSATIONS_PAGE_SIZE && nextOffset < MAX_CONVERSATIONS);
+    } catch (error: any) {
+      if (error?.name !== 'CanceledError' && error?.code !== 'ERR_CANCELED') {
+        console.error('Failed to load more conversations', error);
+      }
     } finally {
-      loadingMoreRef.current = false;
-      setLoadingMoreConversations(false);
+      if (requestId === loadMoreRequestIdRef.current) {
+        loadingMoreRef.current = false;
+        setLoadingMoreConversations(false);
+      }
     }
-  };
+  }, [conversationQuery, hasMoreConversations]);
 
   const handleConversationsScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
@@ -494,34 +627,85 @@ export const Conversations = () => {
     lastMessagesLength.current = messages.length;
   }, [messages]);
 
+  const selectedConversationId = selectedConv?._id;
+
   useEffect(() => {
     lastMessagesLength.current = 0;
     setChatSearchTerm('');
     setChatSearchIndex(0);
     setIsChatSearchOpen(false);
-  }, [selectedConv]);
-
-  const lastConversationsHash = useRef<string>('');
+  }, [selectedConversationId]);
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
 
   useEffect(() => {
-    fetchConversationsList();
-    const interval = setInterval(fetchConversationsList, 8000);
-    return () => clearInterval(interval);
-  }, []);
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   useEffect(() => {
-    if (id && conversations.length > 0 && (!selectedConv || selectedConv._id !== id)) {
-      const conv = conversations.find(c => c._id === id);
-      if (conv) {
-        setSelectedConv(conv);
-        setShowMobileChat(true);
+    loadMoreRequestRef.current?.abort();
+    loadMoreRequestIdRef.current += 1;
+    loadingMoreRef.current = false;
+    setLoadingMoreConversations(false);
+    setConversations([]);
+    setHasMoreConversations(true);
+    nextConversationOffsetRef.current = 0;
+    lastConversationsHash.current = '';
+    if (conversationsRef.current.length === 0) setLoading(true);
+    void fetchConversationsList(true);
+
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const startPolling = () => {
+      if (document.hidden) return;
+      void fetchConversationsList();
+      interval = setInterval(() => void fetchConversationsList(), 8000);
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (interval) clearInterval(interval);
+        interval = undefined;
+      } else if (!interval) {
+        startPolling();
       }
+    };
+    startPolling();
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      if (interval) clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
+      listRequestRef.current?.abort();
+      listRequestIdRef.current += 1;
+      loadingListRef.current = false;
+    };
+  }, [fetchConversationsList]);
+
+  useEffect(() => {
+    if (!id || debouncedSearch || filterStatus !== 'all' || filterChannel !== 'all' || conversationsRef.current.some(candidate => candidate._id === id)) return;
+    const controller = new AbortController();
+    void getConversations({ limit: 1, conversationId: id }, controller.signal)
+      .then(data => {
+        const conversation = Array.isArray(data) ? data[0] : null;
+        if (!conversation || controller.signal.aborted) return;
+        setConversations(current => [conversation, ...current.filter(candidate => candidate._id !== id)]);
+      })
+      .catch(() => { });
+    return () => controller.abort();
+  }, [id, debouncedSearch, filterStatus, filterChannel]);
+
+  useEffect(() => {
+    if (!id) return;
+    const conversation = conversations.find(candidate => candidate._id === id);
+    if (!conversation) return;
+    setSelectedConv(conversation);
+    if (selectedConversationId !== id) {
+      setTagInput('');
+      setShowMobileChat(true);
     }
-  }, [id, conversations]);
+  }, [id, conversations, selectedConversationId]);
 
   useEffect(() => {
     api.get('/multi-whatsapp/connections').then(res => {
@@ -540,61 +724,78 @@ export const Conversations = () => {
       .catch(err => console.error('Error fetching team agents:', err));
   }, []);
 
-  // Los filtros se aplican sobre lo ya cargado, sin cortar la lista en páginas.
-  const filteredConversations = useMemo(() => {
-    let filtered = conversations;
-    if (searchTerm) {
-      filtered = filtered.filter(conv => {
-        const realPhone = getRealPhoneNumber(conv.contactId);
-        return (conv.contactId?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (realPhone || '').includes(searchTerm);
-      });
-    }
-    if (filterStatus !== 'all') {
-      filtered = filtered.filter(conv => {
-        if (filterStatus === 'unread') return conv.unreadCount > 0;
-        if (filterStatus === 'groups') return conv.contactId?.isGroup === true;
-        if (filterStatus === 'replied') return conv.hasReplied === true;
-        if (filterStatus === 'not_replied') return conv.hasReplied === false;
-        return true;
-      });
-    }
-    if (filterChannel !== 'all') {
-      filtered = filtered.filter(conv => normalizeChannel(conv.channel) === filterChannel);
-    }
-    return filtered;
-  }, [conversations, searchTerm, filterStatus, filterChannel]);
-
-  // Con un filtro o búsqueda activos se cargan las páginas restantes para que
-  // el resultado no dependa de cuánto se haya hecho scroll (máx. 200 chats).
-  useEffect(() => {
-    const filterActive = filterStatus !== 'all' || !!searchTerm;
-    if (filterActive && !loading && hasMoreConversations) {
-      void loadMoreConversations();
-    }
-  }, [filterStatus, searchTerm, hasMoreConversations, loading, conversations.length]);
-
-  const lastMessagesHash = useRef<string>('');
+  const filteredConversations = conversations;
 
   useEffect(() => {
-    if (selectedConv) {
-      const loadMessages = async () => {
-        try {
-          const data = await getConversationMessages(selectedConv._id);
-          const newHash = JSON.stringify(data.map((m: any) => ({ id: m._id, s: m.status })));
-          if (newHash !== lastMessagesHash.current) {
-            lastMessagesHash.current = newHash;
-            setMessages(data);
-          }
-        } catch (err) {
-          console.error('Failed to load messages', err);
+    if (!selectedConversationId) {
+      messageVersionRef.current = '';
+      return;
+    }
+
+    const controller = new AbortController();
+    let active = true;
+    let polling = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    messageVersionRef.current = '';
+    setMessages([]);
+
+    const versionFor = (items: any[]) => {
+      const latest = items[items.length - 1];
+      return latest ? `${latest.createdAt}|${latest._id}|${latest.status || ''}` : '';
+    };
+
+    const loadMessages = async () => {
+      const result = await getConversationMessages(selectedConversationId, { markRead: true, signal: controller.signal });
+      if (!active || controller.signal.aborted) return;
+      const items = Array.isArray(result.messages) ? result.messages : [];
+      messageVersionRef.current = `${versionFor(items)}|e:${result.eventVersion || 0}`;
+      setMessages(items);
+    };
+
+    const pollUpdates = async () => {
+      if (!active || polling || document.hidden) return;
+      polling = true;
+      let retryDelay = 0;
+      try {
+        const update = await getConversationMessageUpdates(selectedConversationId, messageVersionRef.current, controller.signal);
+        if (!active || controller.signal.aborted) return;
+        if (update.changed) await loadMessages();
+        else if (update.version) messageVersionRef.current = update.version;
+      } catch (error: any) {
+        if (!active || controller.signal.aborted || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return;
+        console.error('Failed to load message updates', error);
+        retryDelay = 3000;
+      } finally {
+        polling = false;
+        if (active && !document.hidden) {
+          retryTimer = setTimeout(() => void pollUpdates(), retryDelay);
         }
-      };
-      loadMessages();
-      const interval = setInterval(loadMessages, 4000);
-      return () => clearInterval(interval);
-    }
-  }, [selectedConv]);
+      }
+    };
+
+    const onVisibility = () => {
+      if (!document.hidden && !polling) void pollUpdates();
+    };
+
+    void loadMessages()
+      .then(() => {
+        if (active && !document.hidden) void pollUpdates();
+      })
+      .catch((error: any) => {
+        if (active && error?.name !== 'CanceledError' && error?.code !== 'ERR_CANCELED') {
+          console.error('Failed to load messages', error);
+          retryTimer = setTimeout(() => void pollUpdates(), 3000);
+        }
+      });
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      active = false;
+      controller.abort();
+      if (retryTimer) clearTimeout(retryTimer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [selectedConversationId]);
 
   const fetchCatalogs = async () => {
     if (catalogs.length > 0) return;
@@ -772,6 +973,60 @@ export const Conversations = () => {
     return colors[Math.abs(hash) % colors.length];
   };
 
+  const getConvTags = (conv: any): string[] => {
+    const convTags = Array.isArray(conv?.tags) ? conv.tags : [];
+    const contactTags = Array.isArray(conv?.contactId?.tags) ? conv.contactId.tags : [];
+    return Array.from(
+      new Set([...convTags, ...contactTags].map((t: any) => String(t ?? '').trim()).filter(Boolean))
+    ).slice(0, 20);
+  };
+
+  const persistConversationTags = async (nextTags: string[]) => {
+    if (!selectedConv?._id) return;
+    const conversationId = selectedConv._id;
+    const safeTags = Array.from(new Set(nextTags.map((t) => t.trim()).filter(Boolean))).slice(0, 20);
+    setSavingTags(true);
+    try {
+      await updateConversationTags(conversationId, safeTags);
+      setSelectedConv((prev: any) => {
+        if (prev?._id !== conversationId) return prev;
+        return {
+          ...prev,
+          tags: safeTags,
+          contactId: prev.contactId ? { ...prev.contactId, tags: safeTags } : prev.contactId,
+        };
+      });
+      setConversations((prev) => prev.map((c) => (
+        c._id === conversationId
+          ? { ...c, tags: safeTags, contactId: c.contactId ? { ...c.contactId, tags: safeTags } : c.contactId }
+          : c
+      )));
+    } catch (error) {
+      addNotification({ type: 'error', title: 'Error', message: 'No se pudieron guardar las etiquetas.' });
+    } finally {
+      setSavingTags(false);
+    }
+  };
+
+  const handleAddTag = async () => {
+    if (!selectedConv) return;
+    const value = tagInput.trim();
+    if (!value) return;
+    const current = getConvTags(selectedConv);
+    if (current.some((t) => t.toLowerCase() === value.toLowerCase())) {
+      setTagInput('');
+      return;
+    }
+    await persistConversationTags([...current, value]);
+    setTagInput('');
+  };
+
+  const handleRemoveTag = async (tag: string) => {
+    if (!selectedConv) return;
+    const current = getConvTags(selectedConv);
+    await persistConversationTags(current.filter((t) => t !== tag));
+  };
+
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
@@ -785,36 +1040,6 @@ export const Conversations = () => {
   const handleEmojiSelect = (emoji: string) => {
     setMessageText(prev => prev + emoji);
     setShowEmojiPicker(false);
-  };
-
-  const MessageStatus = ({ status }: { status?: string }) => {
-    const statusColors: Record<string, string> = {
-      sending: 'text-gray-300 dark:text-gray-600',
-      sent: 'text-gray-400 dark:text-gray-500',
-      delivered: 'text-gray-400 dark:text-gray-500',
-      read: 'text-[#53bdeb]',
-      error: 'text-red-500 dark:text-red-400',
-    };
-    const color = statusColors[status || 'sent'] || statusColors.sent;
-    const label = status === 'read' ? 'Leído'
-      : status === 'delivered' ? 'Entregado'
-      : status === 'error' ? 'Error'
-      : status === 'sending' ? 'Enviando'
-      : 'Enviado';
-
-    if (status === 'error') {
-      return <span title={label} className={`text-[9px] font-bold ${color}`}>Error</span>;
-    }
-    if (status === 'sending') {
-      return <span title={label} className={`text-[9px] font-bold ${color}`}>...</span>;
-    }
-    if (status === 'read') {
-      return <span title={label} className="inline-flex"><CheckCheck className={`w-4 h-4 ${color}`} aria-label={label} /></span>;
-    }
-    if (status === 'delivered') {
-      return <span title={label} className="inline-flex"><CheckCheck className={`w-4 h-4 ${color}`} aria-label={label} /></span>;
-    }
-    return <span title={label} className="inline-flex"><Check className={`w-3.5 h-3.5 ${color}`} aria-label={label} /></span>;
   };
 
   const handleAttachFile = () => {
@@ -1032,19 +1257,6 @@ export const Conversations = () => {
     return { text, kind: null };
   };
 
-  // Icono compacto que acompaña a la etiqueta del último mensaje (Foto, Audio…).
-  const PreviewIcon = ({ kind }: { kind: PreviewKind }) => {
-    if (!kind) return null;
-    const Icon = kind === 'image' ? Camera
-      : kind === 'video' ? Video
-      : kind === 'audio' ? Mic
-      : kind === 'document' ? Paperclip
-      : kind === 'location' ? MapPin
-      : kind === 'sticker' ? Sticker
-      : User;
-    return <Icon className="w-3 h-3 shrink-0" />;
-  };
-
   const getMessageMedia = (content: any): { url: string; type: MediaKind; filename?: string; caption?: string } | null => {
     const parsed = parseContentObject(content);
     if (!parsed || typeof parsed !== 'object') {
@@ -1178,12 +1390,26 @@ export const Conversations = () => {
     }
   };
 
+  const conversationPreviews = useMemo(() => new Map(
+    conversations.map(conversation => [conversation._id, getConversationPreview(conversation.lastMessageContent)])
+  ), [conversations]);
+
+  const messageRenderData = useMemo(() => messages.map(message => ({
+    body: parseMessage(message.content),
+    media: getMessageMedia(message.content),
+    sticker: isStickerMessage(message.content),
+    location: getMessageLocation(message.content),
+    buttons: parseButtons(message.content),
+    numericButtons: isNumericButtons(message.content),
+  })), [messages]);
+
   const chatSearchResults = useMemo(() => {
-    if (!chatSearchTerm) return [];
-    return messages
-      .map((m, i) => ({ m, i, body: parseMessage(m.content) }))
-      .filter(({ body }) => body?.toLowerCase().includes(chatSearchTerm.toLowerCase()));
-  }, [messages, chatSearchTerm]);
+    const term = chatSearchTerm.trim().toLowerCase();
+    if (!term) return [];
+    return messageRenderData
+      .map((rendered, index) => ({ index, body: rendered.body }))
+      .filter(({ body }) => body.toLowerCase().includes(term));
+  }, [messageRenderData, chatSearchTerm]);
 
   const goToChatSearchResult = (dir: 'next' | 'prev') => {
     if (chatSearchResults.length === 0) return;
@@ -1191,7 +1417,7 @@ export const Conversations = () => {
       ? (chatSearchIndex + 1) % chatSearchResults.length
       : (chatSearchIndex - 1 + chatSearchResults.length) % chatSearchResults.length;
     setChatSearchIndex(next);
-    const idx = chatSearchResults[next]?.i;
+    const idx = chatSearchResults[next]?.index;
     if (idx !== undefined && chatSearchRefs.current[idx]) {
       chatSearchRefs.current[idx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -1372,31 +1598,6 @@ export const Conversations = () => {
   };
 
   const isBotPaused = (conv: any) => getBotStatus(conv) !== 'active';
-
-  // Icono de estado del bot/persona con tooltip propio al pasar el mouse.
-  const BotStatusIndicator = ({ conv, sizeClass = 'w-3.5 h-3.5' }: { conv: any; sizeClass?: string }) => {
-    const status = getBotStatus(conv);
-    let icon: React.ReactNode;
-    let label: string;
-    if (status === 'handoff') {
-      icon = <User className={`${sizeClass} text-red-500`} />;
-      label = 'Agente humano atendiendo';
-    } else if (status === 'capture') {
-      icon = <Bot className={`${sizeClass} text-red-500`} />;
-      label = 'Bot en pausa';
-    } else {
-      icon = <Bot className={`${sizeClass} text-yellow-400`} />;
-      label = 'Bot atendiendo';
-    }
-    return (
-      <span className="relative group inline-flex items-center shrink-0">
-        {icon}
-        <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-50 whitespace-nowrap bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-[9px] font-bold px-2 py-1 rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-          {label}
-        </span>
-      </span>
-    );
-  };
 
   const handleReactivateBot = async () => {
     if (!selectedConv) return;
@@ -1648,7 +1849,7 @@ export const Conversations = () => {
             const avatar = generateAvatar(contact);
             const channelBadge = getChannelBadge(normalizeChannel(conv.channel));
             const ChannelIcon = channelBadge.icon;
-            const preview = getConversationPreview(conv.lastMessageContent);
+            const preview = conversationPreviews.get(conv._id) || { text: 'Sin mensajes', kind: null };
 
             return (
               <div
@@ -1694,13 +1895,8 @@ export const Conversations = () => {
                       <div className={`w-4 h-4 rounded flex items-center justify-center text-white shrink-0 ${channelBadge.color}`} title={channelBadge.label}>
                         {ChannelIcon ? <ChannelIcon className="w-2.5 h-2.5" /> : <span className="text-[8px] font-bold">T</span>}
                       </div>
-                      {conv.tags?.map((tag: string, i: number) => (
-                        <span key={i} className={`px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wider shrink-0 ${getTagColor(tag)}`}>
-                          {tag}
-                        </span>
-                      ))}
-                      {contact.tags?.map((tag: string, i: number) => (
-                        <span key={`c-${i}`} className={`px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wider shrink-0 ${getTagColor(tag)}`}>
+                      {Array.from(new Set([...(conv.tags || []), ...(contact.tags || [])].map((t: any) => String(t ?? '').trim()).filter(Boolean))).map((tag: string, i: number) => (
+                        <span key={`${tag}-${i}`} className={`px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wider shrink-0 ${getTagColor(tag)}`}>
                           {tag}
                         </span>
                       ))}
@@ -1849,14 +2045,14 @@ export const Conversations = () => {
 
               {/* Desktop header (card style) */}
               <div className="hidden md:block px-4 md:px-6 py-2 relative z-20">
-                <div className="bg-white/90 dark:bg-[#202020]/90 backdrop-blur-xl px-4 py-2.5 rounded-2xl border border-gray-100 dark:border-white/5 shadow-sm flex items-center justify-between transition-all">
-                  <div className="flex items-center gap-3">
+                <div className="bg-white/90 dark:bg-[#202020]/90 backdrop-blur-xl px-4 py-2.5 rounded-2xl border border-gray-100 dark:border-white/5 shadow-sm flex items-center justify-between transition-all gap-4">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-base shadow-sm ${generateAvatar(selectedConv.contactId).bgColor}`}>
                       {selectedConv.contactId?.isGroup ? <Users className="w-5 h-5" /> : generateAvatar(selectedConv.contactId).content}
                     </div>
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-0.5">
-                        <h3 className="text-base font-black text-gray-900 dark:text-white tracking-tight leading-none">
+                        <h3 className="text-base font-black text-gray-900 dark:text-white tracking-tight leading-none truncate">
                           {selectedConv.contactId?.name || (() => {
                             const realPhone = getRealPhoneNumber(selectedConv.contactId);
                             const { prefix, number } = formatPhoneNumber(realPhone);
@@ -1864,11 +2060,54 @@ export const Conversations = () => {
                           })()}
                         </h3>
                       </div>
-                      <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide leading-none mt-1.5 block">{(() => {
+                      <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide leading-none mt-1.5 block truncate">{(() => {
                         const realPhone = getRealPhoneNumber(selectedConv.contactId);
                         const { prefix, number } = formatPhoneNumber(realPhone);
                         return prefix && number ? `${prefix} ${number}` : number || realPhone || 'Sin número guardado';
                       })()}</span>
+
+                      <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-gray-400">
+                          <Tag className="w-3 h-3" /> Etiquetas
+                        </span>
+                        {getConvTags(selectedConv).map((tag) => (
+                          <span key={tag} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] font-bold ${getTagColor(tag)}`}>
+                            {tag}
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTag(tag)}
+                              disabled={savingTags}
+                              className="opacity-70 hover:opacity-100 disabled:opacity-40"
+                              title="Quitar etiqueta"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                        <div className="flex items-center gap-1">
+                          <input
+                            value={tagInput}
+                            onChange={(e) => setTagInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleAddTag();
+                              }
+                            }}
+                            placeholder="Agregar etiqueta"
+                            disabled={savingTags}
+                            className="h-6 w-28 rounded-md border border-gray-200 dark:border-white/10 bg-white/80 dark:bg-white/5 px-2 text-[10px] text-gray-700 dark:text-gray-200 outline-none focus:border-accent-500/40 disabled:opacity-50"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleAddTag}
+                            disabled={savingTags || !tagInput.trim()}
+                            className="h-6 px-2 rounded-md bg-accent-500/10 text-accent-600 dark:text-accent-400 text-[10px] font-bold hover:bg-accent-500/20 disabled:opacity-40"
+                          >
+                            {savingTags ? '...' : 'Agregar'}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   
@@ -2017,44 +2256,18 @@ export const Conversations = () => {
             >
               {messages.map((m, msgIdx) => {
                 const isMe = m.direction === 'outbound';
-                const body = parseMessage(m.content);
-                const media = getMessageMedia(m.content);
-                const sticker = isStickerMessage(m.content);
-                const location = getMessageLocation(m.content);
+                const rendered = messageRenderData[msgIdx];
+                const body = rendered.body;
+                const media = rendered.media;
+                const sticker = rendered.sticker;
+                const location = rendered.location;
                 const unavailableMedia = !media && !sticker && !location && ['image', 'video', 'audio', 'document'].includes(m.type)
                   ? (m.type === 'audio' ? 'Audio no disponible' : m.type === 'video' ? 'Video no disponible' : m.type === 'image' ? 'Imagen no disponible' : 'Archivo no disponible')
                   : null;
-                const isCurrentSearch = chatSearchResults[chatSearchIndex]?.i === msgIdx;
-                const searchKey = chatSearchTerm || '';
-
-                const highlightText = (text: string) => {
-                  if (!chatSearchTerm) {
-                    return text
-                      .replace(/&/g, '&amp;')
-                      .replace(/</g, '&lt;')
-                      .replace(/>/g, '&gt;')
-                      .replace(/\*\*(.+?)\*\*/g, '<strong class="font-extrabold">$1</strong>')
-                      .replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
-                      .replace(/~~(.+?)~~/g, '<span class="line-through">$1</span>')
-                      .replace(/`(.+?)`/g, '<code class="bg-black/10 dark:bg-white/10 px-1 rounded text-[11px] font-mono">$1</code>')
-                      .replace(/\n/g, '<br />');
-                  }
-                  const parts = text.split(new RegExp(`(${chatSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
-                  const html = parts.map(part =>
-                    part.toLowerCase() === chatSearchTerm.toLowerCase()
-                      ? `<mark class="bg-amber-300 text-gray-900 rounded-sm px-0.5">${part}</mark>`
-                      : part
-                  ).join('');
-                  return html
-                    .replace(/\*\*(.+?)\*\*/g, '<strong class="font-extrabold">$1</strong>')
-                    .replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
-                    .replace(/~~(.+?)~~/g, '<span class="line-through">$1</span>')
-                    .replace(/`(.+?)`/g, '<code class="bg-black/10 dark:bg-white/10 px-1 rounded text-[11px] font-mono">$1</code>')
-                    .replace(/\n/g, '<br />');
-                };
+                const isCurrentSearch = chatSearchResults[chatSearchIndex]?.index === msgIdx;
 
                 return (
-                  <div key={`${m._id}-${searchKey}`} ref={el => { chatSearchRefs.current[msgIdx] = el; }}
+                  <div key={m._id} ref={el => { chatSearchRefs.current[msgIdx] = el; }}
                     className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} transition-all duration-300 ${isCurrentSearch ? 'ring-2 ring-amber-400 dark:ring-amber-500 rounded-2xl scale-[1.02]' : ''}`}>
                     <div className={`flex items-end gap-1.5 max-w-[90%] md:max-w-[80%] lg:max-w-[70%] xl:max-w-[60%] ${isMe ? 'animate-[slideInRight_0.3s_ease-out]' : 'animate-[slideInLeft_0.3s_ease-out]'}`}>
                       {!isMe && (
@@ -2113,7 +2326,7 @@ export const Conversations = () => {
                             </div>
                           </a>
                         ) : null}
-                        {body && <p className="text-[13px] font-medium leading-relaxed whitespace-pre-wrap tracking-wide" dangerouslySetInnerHTML={{ __html: highlightText(body) }} />}
+                        {body && <p className="text-[13px] font-medium leading-relaxed whitespace-pre-wrap tracking-wide" dangerouslySetInnerHTML={{ __html: formatMessageText(body, chatSearchTerm) }} />}
                         <div className={`flex justify-end items-center gap-1.5 ${body || media || sticker || location || unavailableMedia ? 'mt-2' : ''} ${isMe ? 'text-gray-400 dark:text-gray-500' : 'text-white/70'}`}>
                           <span className="text-[9px] font-black uppercase tracking-widest">
                             {formatTime(m.createdAt)}
@@ -2122,33 +2335,33 @@ export const Conversations = () => {
                         </div>
                       </div>
                     </div>
-                    {!isMe && parseButtons(m.content).length > 0 && (
+                    {!isMe && rendered.buttons.length > 0 && (
                       <div className="flex flex-col gap-1.5 mt-1.5 ml-9 max-w-[80%] lg:max-w-[70%]">
                         <span className="text-[9px] uppercase tracking-widest text-gray-400 dark:text-gray-500 font-black mb-0.5 ml-1">
                           Opciones del bot
                         </span>
-                        {parseButtons(m.content).map((btn, idx) => (
+                        {rendered.buttons.map((btn, idx) => (
                           <AnimatedButton
                             key={btn.id}
                             variant="ghost"
                             onClick={() => handleBotButtonClick({
                               ...btn,
-                              ...(isNumericButtons(m.content) ? { number: String(idx + 1) } : {}),
+                              ...(rendered.numericButtons ? { number: String(idx + 1) } : {}),
                             })}
                             className="!text-[10px] !py-2 !px-4 !rounded-full w-full !justify-center !bg-white dark:!bg-[#202020] !border !border-gray-200 dark:!border-white/10 !text-gray-700 dark:!text-gray-200 hover:!bg-gray-50 dark:hover:!bg-white/5"
                           >
-                            {isNumericButtons(m.content) ? `${idx + 1}. ${btn.text}` : btn.text}
+                            {rendered.numericButtons ? `${idx + 1}. ${btn.text}` : btn.text}
                           </AnimatedButton>
                         ))}
                       </div>
                     )}
-                    {isMe && parseButtons(m.content).length > 0 && (
+                    {isMe && rendered.buttons.length > 0 && (
                       <div className="flex flex-col mt-1.5 mr-9 max-w-[80%] lg:max-w-[70%] items-end">
                         <div className="flex flex-col w-full gap-1 rounded-xl px-3 py-2 bg-white dark:bg-[#202020] border border-gray-200 dark:border-white/10 shadow-sm">
                           <span className="text-[9px] uppercase tracking-widest text-gray-400 dark:text-gray-500 font-black mb-0.5">
                             Opciones
                           </span>
-                          {parseButtons(m.content).map((btn, idx) => (
+                          {rendered.buttons.map((btn, idx) => (
                             <div
                               key={btn.id}
                               className="flex items-center gap-2 text-[10px] py-0.5 text-gray-700 dark:text-gray-200 font-medium"
@@ -2381,7 +2594,7 @@ export const Conversations = () => {
               <div className="absolute inset-0 bg-accent-500/10 blur-[60px] rounded-full" />
               <MessageCircle className="w-24 h-24 text-accent-500 z-10 animate-pulse-slow" />
             </div>
-            <h2 className="text-3xl font-black text-gray-900 dark:text-white mb-4 tracking-tighter">SparkBot Messaging</h2>
+            <h2 className="text-3xl font-black text-gray-900 dark:text-white mb-4 tracking-tighter">CRM GSC</h2>
             <p className="max-w-sm text-gray-500 dark:text-gray-400 text-sm font-medium leading-relaxed mb-10 px-6">
               Gestiona todas tus interacciones de WhatsApp desde una interfaz centralizada y moderna.
             </p>

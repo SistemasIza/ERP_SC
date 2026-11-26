@@ -2,6 +2,7 @@ import express from 'express';
 import { messageTemplatesService } from './messageTemplates.service';
 import { whatsappCloudService } from '../integrations/platform/whatsappCloudService';
 import { supabase } from '../../core/config/supabase';
+import { publishMessageChange } from '../chat/messageEvents';
 
 
 const router = express.Router();
@@ -191,7 +192,7 @@ router.post('/send-template', async (req: any, res: any) => {
 
       if (conversation) {
         const wamid = result?.messages?.[0]?.id || null;
-        await supabase.from('messages').insert({
+        const { error: messageError } = await supabase.from('messages').insert({
           organization_id: orgId,
           conversation_id: conversation.id,
           contact_id: contact.id,
@@ -202,11 +203,13 @@ router.post('/send-template', async (req: any, res: any) => {
             || `[Plantilla: ${templateName}]`,
           status: 'sent',
         });
+        if (messageError) throw messageError;
 
         await supabase
           .from('conversations')
           .update({ last_message_at: new Date().toISOString() })
           .eq('id', conversation.id);
+        publishMessageChange({ organizationId: orgId, conversationId: conversation.id, messageId: wamid || undefined });
       }
     }
 

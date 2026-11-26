@@ -2,6 +2,7 @@ import axios from 'axios';
 import crypto from 'crypto';
 import { supabase } from '../../../core/config/supabase';
 import { handleIncomingMessage } from '../../bots/engine/flow-core';
+import { publishMessageChange } from '../../chat/messageEvents';
 import { BasePlatformService, PlatformConnection, PlatformMessage, PlatformServiceAdapter } from './basePlatformService';
 
 export class InstagramService extends BasePlatformService {
@@ -445,7 +446,7 @@ export class InstagramService extends BasePlatformService {
       conversation = newConversation;
     }
 
-    await supabase.from('messages').insert({
+    const { error: messageError } = await supabase.from('messages').insert({
       organization_id: connection.organizationId,
       conversation_id: conversation.id,
       contact_id: contact.id,
@@ -456,11 +457,17 @@ export class InstagramService extends BasePlatformService {
       content: JSON.stringify(message),
       platform_message_id: message.id
     });
+    if (messageError) throw messageError;
 
     await supabase
       .from('conversations')
       .update({ last_message_at: new Date().toISOString() })
       .eq('id', conversation.id);
+    publishMessageChange({
+      organizationId: connection.organizationId,
+      conversationId: conversation.id,
+      messageId: message.id,
+    });
 
     return { contact, conversation };
   }

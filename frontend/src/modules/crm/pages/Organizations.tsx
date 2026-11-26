@@ -317,7 +317,7 @@ export const Organizations = () => {
                         value={formData.name}
                         onChange={e => setFormData({ ...formData, name: e.target.value })}
                         className="w-full px-4 py-3.5 dark:bg-white/5 border border-slate-200 dark:border-slate-800 rounded-2xl focus:border-accent-500/50 focus:ring-4 focus:ring-accent-500/5 outline-none transition-all font-bold text-sm text-slate-900 dark:text-white placeholder-slate-400/60"
-                        placeholder="Ej. SparkBot Corporation"
+                        placeholder="Ej. GSC Corporation"
                       />
                       <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
                         <Building2 className="w-4 h-4" />

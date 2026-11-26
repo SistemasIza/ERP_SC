@@ -6,7 +6,35 @@ on:
   workflow_dispatch:
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      docker: ${{ steps.check.outputs.docker }}
+      kube: ${{ steps.check.outputs.kube }}
+    steps:
+    - name: Check required secrets
+      id: check
+      env:
+        DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+        DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+      run: |
+        if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+          echo "docker=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "docker=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=CD omitido::Faltan DOCKER_USERNAME/DOCKER_PASSWORD; no se construye ni publica la imagen."
+        fi
+        if [ -n "$KUBE_CONFIG" ]; then
+          echo "kube=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "kube=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Deploy omitido::Falta KUBE_CONFIG; no se despliega en Kubernetes."
+        fi
+
   build-and-push:
+    needs: preflight
+    if: needs.preflight.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
@@ -31,7 +59,8 @@ jobs:
         cache-to: type=gha,mode=max
 
   deploy:
-    needs: build-and-push
+    needs: [preflight, build-and-push]
+    if: needs.preflight.outputs.docker == 'true' && needs.preflight.outputs.kube == 'true'
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code

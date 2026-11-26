@@ -50,8 +50,8 @@ const MOCK_SENT: SentEmail[] = [
   {
     id: '1',
     to: 'contacto@empresaabc.com',
-    subject: 'Propuesta de servicios SparkBot',
-    body: 'Estimado equipo,\n\nAdjunto encontrará nuestra propuesta de servicios para su empresa. Hemos diseñado un plan personalizado que se adapta a las necesidades de su negocio, incluyendo herramientas de automatización, CRM omnicanal y analíticas avanzadas.\n\nQuedamos atentos a cualquier pregunta o comentario.\n\nSaludos cordiales,\nEquipo SparkBot',
+    subject: 'Propuesta de servicios CRM GSC',
+    body: 'Estimado equipo,\n\nAdjunto encontrará nuestra propuesta de servicios para su empresa. Hemos diseñado un plan personalizado que se adapta a las necesidades de su negocio, incluyendo herramientas de automatización, CRM omnicanal y analíticas avanzadas.\n\nQuedamos atentos a cualquier pregunta o comentario.\n\nSaludos cordiales,\nEquipo CRM GSC',
     sentAt: new Date(Date.now() - 1000 * 60 * 45),
     starred: true,
   },
@@ -60,7 +60,7 @@ const MOCK_SENT: SentEmail[] = [
     to: 'gerencia@clientexyz.com',
     cc: 'ventas+fabpsandoval@gmail.com',
     subject: 'Seguimiento reunión del jueves',
-    body: 'Buenas tardes,\n\nEscribimos para dar seguimiento a la reunión del jueves pasado. Adjunto la presentación con los puntos clave que discutimos:\n\n1. Integración con WhatsApp Business API\n2. Dashboard de métricas en tiempo real\n3. Migración de datos desde su CRM actual\n\nQuedamos a la espera de su confirmación para iniciar la implementación.\n\nSaludos,\nEquipo SparkBot',
+    body: 'Buenas tardes,\n\nEscribimos para dar seguimiento a la reunión del jueves pasado. Adjunto la presentación con los puntos clave que discutimos:\n\n1. Integración con WhatsApp Business API\n2. Dashboard de métricas en tiempo real\n3. Migración de datos desde su CRM actual\n\nQuedamos a la espera de su confirmación para iniciar la implementación.\n\nSaludos,\nEquipo CRM GSC',
     sentAt: new Date(Date.now() - 1000 * 60 * 60 * 3),
     starred: false,
   },
@@ -68,7 +68,7 @@ const MOCK_SENT: SentEmail[] = [
     id: '3',
     to: 'info@distribuidora.com',
     subject: 'Información sobre plan Growth',
-    body: 'Hola,\n\nGracias por su interés en nuestros servicios. El Plan Growth incluye:\n\n• Hasta 5,000 conversaciones/mes\n• Todos los canales (WhatsApp, Instagram, Telegram, Messenger, TikTok)\n• Soporte prioritario 24/7\n• Base de conocimiento ilimitada\n\nEl costo es de $499/mes. ¿Te gustaría agendar una demo?\n\nSaludos,\nEquipo SparkBot',
+    body: 'Hola,\n\nGracias por su interés en nuestros servicios. El Plan Growth incluye:\n\n• Hasta 5,000 conversaciones/mes\n• Todos los canales (WhatsApp, Instagram, Telegram, Messenger, TikTok)\n• Soporte prioritario 24/7\n• Base de conocimiento ilimitada\n\nEl costo es de $499/mes. ¿Te gustaría agendar una demo?\n\nSaludos,\nEquipo CRM GSC',
     sentAt: new Date(Date.now() - 1000 * 60 * 60 * 26),
     starred: false,
   },
@@ -76,7 +76,7 @@ const MOCK_SENT: SentEmail[] = [
     id: '4',
     to: 'director@corporativo.mx',
     subject: 'Cotización personalizada — Q3 2026',
-    body: 'Estimado Director,\n\nConforme a su solicitud, adjuntamos la cotización para el tercer trimestre del 2026. La propuesta incluye descuentos por volumen y soporte premium.\n\nQuedamos a su disposición para cualquier ajuste.\n\nAtentamente,\nEquipo SparkBot',
+    body: 'Estimado Director,\n\nConforme a su solicitud, adjuntamos la cotización para el tercer trimestre del 2026. La propuesta incluye descuentos por volumen y soporte premium.\n\nQuedamos a su disposición para cualquier ajuste.\n\nAtentamente,\nEquipo CRM GSC',
     sentAt: new Date(Date.now() - 1000 * 60 * 60 * 50),
     starred: true,
   },
@@ -193,8 +193,8 @@ export const Email = () => {
 
   // Signatures state
   const [signatures, setSignatures] = useState<Signature[]>([
-    { id: '1', name: 'Principal', isDefault: true, fullName: 'Carlos Mendoza', position: 'Director Comercial', company: 'SparkBot', phone: '+52 55 1234 5678', email: 'carlos+fabpsandoval@gmail.com', website: 'sparkbot.io', logoUrl: '', socialLinks: [{ platform: 'linkedin', url: 'https://linkedin.com/in/carlos' }, { platform: 'twitter', url: 'https://twitter.com/carlos' }], layout: 'classic', showSeparator: true, accentColor: '#6366f1', fontSize: 'medium', content: 'Saludos cordiales,\nCarlos Mendoza\nDirector Comercial\nSparkBot' },
-    { id: '2', name: 'Comercial', isDefault: false, fullName: 'Ana López', position: 'Asesor Comercial', company: 'SparkBot', phone: '+52 55 9876 5432', email: 'ana+fabpsandoval@gmail.com', website: 'sparkbot.io', logoUrl: '', socialLinks: [], layout: 'modern', showSeparator: true, accentColor: '#10b981', fontSize: 'medium', content: 'Quedo a tu disposición,\nAna López\nAsesor Comercial\nSparkBot' },
+    { id: '1', name: 'Principal', isDefault: true, fullName: 'Carlos Mendoza', position: 'Director Comercial', company: 'CRM GSC', phone: '+52 55 1234 5678', email: 'carlos+fabpsandoval@gmail.com', website: 'tuempresa.com', logoUrl: '', socialLinks: [{ platform: 'linkedin', url: 'https://linkedin.com/in/carlos' }, { platform: 'twitter', url: 'https://twitter.com/carlos' }], layout: 'classic', showSeparator: true, accentColor: '#6366f1', fontSize: 'medium', content: 'Saludos cordiales,\nCarlos Mendoza\nDirector Comercial\nCRM GSC' },
+    { id: '2', name: 'Comercial', isDefault: false, fullName: 'Ana López', position: 'Asesor Comercial', company: 'CRM GSC', phone: '+52 55 9876 5432', email: 'ana+fabpsandoval@gmail.com', website: 'tuempresa.com', logoUrl: '', socialLinks: [], layout: 'modern', showSeparator: true, accentColor: '#10b981', fontSize: 'medium', content: 'Quedo a tu disposición,\nAna López\nAsesor Comercial\nCRM GSC' },
   ]);
   const [editingSig, setEditingSig] = useState<Signature | null>(null);
   const [sigForm, setSigForm] = useState<Signature>(() => createEmptySig());
@@ -277,9 +277,9 @@ export const Email = () => {
   }, []);
 
   const templates: Record<string, string> = {
-    welcome: 'Hola,\n\nGracias por contactarnos. Quedamos a tu disposición para cualquier consulta.\n\nSaludos cordiales,\nEquipo SparkBot',
-    quote: 'Adjuntamos la cotización solicitada con los detalles de nuestros planes y servicios. Quedamos atentos a cualquier pregunta.\n\nSaludos,\nEquipo SparkBot',
-    followup: 'Buen día,\n\nDamos seguimiento a nuestra conversación anterior. ¿Has tenido oportunidad de revisar la información?\n\nQuedamos atentos.\n\nSaludos,\nEquipo SparkBot',
+    welcome: 'Hola,\n\nGracias por contactarnos. Quedamos a tu disposición para cualquier consulta.\n\nSaludos cordiales,\nEquipo CRM GSC',
+    quote: 'Adjuntamos la cotización solicitada con los detalles de nuestros planes y servicios. Quedamos atentos a cualquier pregunta.\n\nSaludos,\nEquipo CRM GSC',
+    followup: 'Buen día,\n\nDamos seguimiento a nuestra conversación anterior. ¿Has tenido oportunidad de revisar la información?\n\nQuedamos atentos.\n\nSaludos,\nEquipo CRM GSC',
   };
 
   const insertTemplate = (key: string) => {
@@ -551,7 +551,7 @@ export const Email = () => {
                   <div className="flex items-center gap-2 px-5 py-2 bg-accent-500/[0.03] border-b border-accent-500/10 dark:border-accent-500/20">
                     <Package className="w-3.5 h-3.5 text-accent-500" />
                     <span className="text-[10px] font-semibold text-accent-600 dark:text-accent-400 flex-1">
-                      Catálogo adjunto: Productos SparkBot (12 artículos)
+                      Catálogo adjunto: Productos CRM GSC (12 artículos)
                     </span>
                     <button onClick={() => setAttachedCatalog(null)}
                       className="p-0.5 text-slate-400 hover:text-red-500 rounded transition-all">
@@ -863,7 +863,7 @@ export const Email = () => {
                               className="w-full h-9 px-3 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-900 dark:text-white outline-none focus:border-accent-500 transition-all placeholder:text-slate-400" />
                             <input type="email" value={sigForm.email} onChange={e => updateSigForm('email', e.target.value)} placeholder="email@empresa.com"
                               className="w-full h-9 px-3 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-900 dark:text-white outline-none focus:border-accent-500 transition-all placeholder:text-slate-400" />
-                            <input type="text" value={sigForm.website} onChange={e => updateSigForm('website', e.target.value)} placeholder="sparkbot.io"
+                            <input type="text" value={sigForm.website} onChange={e => updateSigForm('website', e.target.value)} placeholder="tuempresa.com"
                               className="w-full h-9 px-3 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-900 dark:text-white outline-none focus:border-accent-500 transition-all placeholder:text-slate-400" />
                           </div>
                         </div>

@@ -41,7 +41,7 @@ export const Register = () => {
           <div className="flex flex-col items-center text-center space-y-6">
             <div className="inline-flex items-center gap-3 px-4 py-2 bg-white/5 border border-white/10 rounded-2xl backdrop-blur-md mb-4 shadow-xl shadow-primary-500/5">
               <MessageCircle className="w-6 h-6 text-primary-400" />
-              <span className="text-white font-bold tracking-tight">SparkBot</span>
+              <span className="text-white font-bold tracking-tight">CRM GSC</span>
             </div>
 
             <div className="space-y-6">
@@ -75,7 +75,7 @@ export const Register = () => {
 
         {/* Footer info Left Side */}
         <div className="absolute bottom-8 left-0 right-0 flex items-center justify-center gap-8 text-[10px] font-bold text-gray-600 uppercase tracking-widest pointer-events-none">
-          <span>© 2024 SPARKBOT TECH</span>
+          <span>© 2024 CRM GSC</span>
           <span className="w-1 h-1 bg-gray-800 rounded-full" />
           <span>SaaS Platform V4.2.0-PRO</span>
         </div>
@@ -93,7 +93,7 @@ export const Register = () => {
             <div className="inline-flex p-3 bg-primary-600/10 rounded-2xl border border-primary-500/20 mb-4">
               <MessageCircle className="w-8 h-8 text-primary-400" />
             </div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">SparkBot</h1>
+            <h1 className="text-2xl font-bold text-white tracking-tight">CRM GSC</h1>
           </div>
 
           <div className="space-y-3 mb-10 text-center lg:text-left">
@@ -194,7 +194,7 @@ export const Register = () => {
           </div>
 
           <p className="text-center text-gray-500 text-[11px] mt-10 font-bold uppercase tracking-wider">
-            SparkBot Tech Hub © 2024
+            CRM GSC Tech Hub © 2024
           </p>
         </div>
       </div>
