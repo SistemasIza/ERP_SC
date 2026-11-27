@@ -493,6 +493,10 @@ config: {
         const apiUrl = `https://graph.facebook.com/v21.0/${config.phoneNumberId}/messages`;
         
         const mediaType = options?.type || 'image';
+        const mediaPayload: any = { link: url };
+        if (mediaType !== 'audio' && mediaType !== 'sticker' && options?.caption) {
+          mediaPayload.caption = options.caption;
+        }
         
         const response = await axios({
           method: 'POST',
@@ -505,10 +509,7 @@ config: {
             messaging_product: 'whatsapp',
             to: phoneNumber,
             type: mediaType,
-            [mediaType]: {
-              link: url,
-              caption: options?.caption,
-            },
+            [mediaType]: mediaPayload,
           },
         });
 
@@ -580,7 +581,7 @@ config: {
         //  - `filename` solo es válido en `document` (rechaza en image/video/audio).
         //  - `caption` es inválido en `audio` (rechaza: "Unexpected key caption on param audio").
         const mediaBody: any = { id: mediaId };
-        if (mediaType !== 'audio' && options?.caption) {
+        if (mediaType !== 'audio' && mediaType !== 'sticker' && options?.caption) {
           mediaBody.caption = options.caption;
         }
         if ((mediaType === 'document') && options?.filename) {

@@ -419,18 +419,27 @@ router.get('/dashboard', async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch metrics' });
     }
 
+    // Real spent: sum of completed/paid/delivered/sent orders (exclude cancelled)
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('total, status')
+      .eq('organization_id', orgId);
+
+    if (ordersError) {
+      console.warn('Error fetching orders for dashboard:', ordersError);
+    }
+
     // Calculate metrics
     const totalDeals = deals?.length || 0;
+    const openDeals = (deals || []).filter((d: any) => d.stage !== 'closed_won' && d.stage !== 'closed_lost');
 
     // "Clientes potenciales": oportunidades abiertas (deals sin cerrar), sin duplicar con
     // los clientes ya registrados en la tabla crm_clients (evita doble conteo).
     const registeredClientIds = new Set((clients || []).map((c: any) => c.id));
     const potentialClientIds = new Set<string>();
-    (deals || [])
-      .filter((d: any) => d.stage !== 'closed_won' && d.stage !== 'closed_lost')
-      .forEach((d: any) => {
-        if (d.client_id && !registeredClientIds.has(d.client_id)) potentialClientIds.add(d.client_id);
-      });
+    openDeals.forEach((d: any) => {
+      if (d.client_id && !registeredClientIds.has(d.client_id)) potentialClientIds.add(d.client_id);
+    });
     const totalClients = (clients?.length || 0) + potentialClientIds.size;
     
     // Count clients by status
@@ -454,15 +463,23 @@ router.get('/dashboard', async (req, res) => {
     // Calculate total value
     const totalValue = (deals || []).reduce((sum: number, deal: any) => sum + (deal.value || 0), 0);
     const wonValue = (deals || []).filter((d: any) => d.stage === 'closed_won').reduce((sum: number, deal: any) => sum + (deal.value || 0), 0);
+    const pipelineValue = openDeals.reduce((sum: number, deal: any) => sum + (deal.value || 0), 0);
+    const spentStatuses = new Set(['paid', 'delivered', 'sent', 'completed']);
+    const totalSpent = (orders || [])
+      .filter((o: any) => spentStatuses.has(String(o.status || '').toLowerCase()))
+      .reduce((sum: number, o: any) => sum + (Number(o.total) || 0), 0);
 
     res.json({
       totalClients,
       totalDeals,
+      openDeals: openDeals.length,
       potentialClients: potentialClientIds.size,
       clientsByStatus,
       dealsByStage,
       totalValue,
       wonValue,
+      pipelineValue,
+      totalSpent,
       conversionRate: totalClients > 0 ? Math.round((clientsByStatus.customer / totalClients) * 100) : 0
     });
   } catch (err) {

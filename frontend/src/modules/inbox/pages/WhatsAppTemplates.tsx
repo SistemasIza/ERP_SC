@@ -617,21 +617,6 @@ export const WhatsAppTemplates = () => {
           </div>
         )}
 
-        {/* Status filter pills */}
-        <div className="flex items-center gap-2 flex-wrap mb-4">
-          {['ALL', 'APPROVED', 'PENDING', 'REJECTED', 'DISABLED'].map(s => {
-            const cfg = s === 'ALL' ? null : STATUS_CONFIG[s];
-            const count = s === 'ALL' ? templates.length : (counts[s] || 0);
-            return (
-              <button key={s} onClick={() => setFilterStatus(s)} className={`flex items-center gap-1.5 px-3 h-8 rounded-full text-[11px] font-bold transition-all ${filterStatus === s ? 'bg-slate-900 dark:bg-white text-white dark:text-black shadow-md' : 'bg-white dark:bg-dark-card border border-slate-200 dark:border-slate-700 text-slate-500 hover:border-slate-400'}`}>
-                {cfg && <cfg.icon className="w-3 h-3" />}
-                {s === 'ALL' ? 'Todos' : cfg?.label}
-                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-black ${filterStatus === s ? 'bg-white/20' : 'bg-slate-100 dark:bg-white/10'}`}>{count}</span>
-              </button>
-            );
-          })}
-        </div>
-
         {/* Search + filters */}
         <div className="bg-white dark:bg-dark-card rounded-xl border border-slate-100 dark:border-slate-800/50 p-4 mb-4">
           <div className="flex flex-col sm:flex-row gap-3">
@@ -640,7 +625,7 @@ export const WhatsAppTemplates = () => {
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar templates por nombre..."
             />
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
               <Dropdown
                 value={filterCategory}
                 onChange={setFilterCategory}
@@ -649,6 +634,17 @@ export const WhatsAppTemplates = () => {
                   { value: 'MARKETING', label: 'Marketing' },
                   { value: 'UTILITY', label: 'Utilidad' },
                   { value: 'AUTHENTICATION', label: 'Autenticación' },
+                ]}
+              />
+              <Dropdown
+                value={filterStatus}
+                onChange={setFilterStatus}
+                options={[
+                  { value: 'ALL', label: `Todos (${templates.length})` },
+                  { value: 'APPROVED', label: `Aprobado (${counts.APPROVED || 0})` },
+                  { value: 'PENDING', label: `Pendiente (${counts.PENDING || 0})` },
+                  { value: 'REJECTED', label: `Rechazado (${counts.REJECTED || 0})` },
+                  { value: 'DISABLED', label: `Deshabilitado (${counts.DISABLED || 0})` },
                 ]}
               />
               <button onClick={() => loadTemplates(true)} disabled={syncing} className="flex items-center gap-2 px-4 h-10 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-600 dark:text-slate-300 hover:border-[#25D366] hover:text-[#25D366] transition-all shrink-0">

@@ -32,6 +32,27 @@ const safeSearchTerm = (value: string): string => value
   .replace(/\s+/g, ' ')
   .trim();
 
+const parseStickerMedia = (content: unknown, mediaUrl?: string | null) => {
+  let parsed: any = content;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  if ((parsed.type || parsed.media?.type) !== 'sticker') return null;
+
+  const url = parsed.url || parsed.media?.url || mediaUrl;
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
+
+  return {
+    url,
+    mimeType: parsed.mime_type || parsed.media?.mime_type || 'image/webp',
+  };
+};
+
 // GET /api/conversations
 router.get('/', async (req, res) => {
   try {
@@ -49,6 +70,7 @@ router.get('/', async (req, res) => {
     }
     const filterStatus = String(req.query.status || 'all');
     const filterChannel = req.query.channel ? normalizeConversationChannel(String(req.query.channel)) : '';
+    const includeSummary = req.query.summary === '1';
 
     const numericSearch = search.replace(/\D/g, '');
     const searchTerms = search
@@ -145,7 +167,21 @@ router.get('/', async (req, res) => {
         )
         .slice(offset, offset + limit);
     }
-    if (conversations.length === 0) return res.json([]);
+    let pendingChatsCount = 0;
+    if (includeSummary) {
+      const { count, error } = await supabase
+        .from('conversations')
+        .select('unread:messages!inner(id)', { count: 'exact', head: true })
+        .eq('organization_id', orgId)
+        .eq('unread.direction', 'inbound')
+        .neq('unread.status', 'read');
+      if (error) console.warn('[Conversations API] Failed to count pending chats:', error);
+      else pendingChatsCount = count || 0;
+    }
+
+    if (conversations.length === 0) {
+      return res.json(includeSummary ? { conversations: [], pendingChatsCount } : []);
+    }
 
     const convIds = conversations.map((conversation: any) => conversation.id);
     const { data: unreadRows, error: unreadError } = await supabase
@@ -184,6 +220,7 @@ router.get('/', async (req, res) => {
           tags: Array.isArray(conv.contacts?.custom_attributes?.tags)
             ? conv.contacts.custom_attributes.tags.filter((tag: any) => typeof tag === 'string' && tag.trim())
             : [],
+          isPotentialLead: !!conv.contacts?.custom_attributes?.is_potential_lead,
           isGroup: conv.contacts?.custom_attributes?.is_group ||
                    conv.contacts?.phone_number?.includes('-') ||
                    (displayPhone && displayPhone.length > 15)
@@ -201,10 +238,74 @@ router.get('/', async (req, res) => {
       };
     });
 
+    if (includeSummary) {
+      return res.json({ conversations: formattedConversations, pendingChatsCount });
+    }
+
     res.json(formattedConversations);
   } catch (error) {
     console.error('[Conversations API] Error:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
+router.get('/stickers', async (req, res) => {
+  try {
+    const orgId = (req as any).organizationId;
+    if (!orgId) return res.status(404).json({ error: 'Organization not found' });
+
+    const { data, error } = await supabase
+      .from('messages')
+      .select('id, content, media_url, created_at')
+      .eq('organization_id', orgId)
+      .eq('direction', 'inbound')
+      .eq('type', 'image')
+      .ilike('content', '%sticker%')
+      .order('created_at', { ascending: false })
+      .limit(1000);
+
+    if (error) throw error;
+
+    const { data: storedStickerFiles, error: storageError } = await supabase.storage
+      .from('chat-media')
+      .list(`${orgId}/stickers`, {
+        limit: 1000,
+        sortBy: { column: 'created_at', order: 'desc' },
+      });
+    if (storageError) console.warn('[Conversations API] Failed to list saved stickers:', storageError);
+
+    const seenUrls = new Set<string>();
+    const stickers: Array<{ id: string; url: string; mimeType: string; createdAt: string }> = [];
+    for (const file of storedStickerFiles || []) {
+      if (!file.name.toLowerCase().endsWith('.webp')) continue;
+      const url = supabase.storage.from('chat-media').getPublicUrl(`${orgId}/stickers/${file.name}`).data.publicUrl;
+      if (seenUrls.has(url)) continue;
+      seenUrls.add(url);
+      stickers.push({
+        id: `stored-${file.name}`,
+        url,
+        mimeType: file.metadata?.mimetype || 'image/webp',
+        createdAt: file.created_at || new Date(0).toISOString(),
+      });
+    }
+
+    for (const message of data || []) {
+      const sticker = parseStickerMedia(message.content, message.media_url);
+      if (!sticker || seenUrls.has(sticker.url)) continue;
+      seenUrls.add(sticker.url);
+      stickers.push({
+        id: message.id,
+        url: sticker.url,
+        mimeType: sticker.mimeType,
+        createdAt: message.created_at,
+      });
+    }
+
+    stickers.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    res.json(stickers);
+  } catch (error: any) {
+    console.error('[Conversations API] Error fetching stickers:', error);
+    res.status(500).json({ error: 'No se pudieron cargar los stickers' });
   }
 });
 
@@ -380,6 +481,56 @@ router.put('/:id/tags', async (req, res) => {
   }
 });
 
+// PUT /api/conversations/:id/lead — mark/unmark contact as potential lead
+router.put('/:id/lead', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const orgId = (req as any).organizationId;
+    if (!orgId) return res.status(404).json({ error: 'Organization not found' });
+
+    const isPotentialLead = !!req.body?.isPotentialLead;
+
+    const { data: conversation, error: convError } = await supabase
+      .from('conversations')
+      .select('id, contact_id, contacts(custom_attributes)')
+      .eq('id', id)
+      .eq('organization_id', orgId)
+      .single();
+
+    if (convError || !conversation?.contact_id) {
+      return res.status(404).json({ error: 'Conversación no encontrada' });
+    }
+
+    const currentAttributes = (conversation as any)?.contacts?.custom_attributes || {};
+    const nextAttributes = { ...currentAttributes, is_potential_lead: isPotentialLead };
+    if (!isPotentialLead) delete (nextAttributes as any).is_potential_lead;
+
+    const { data: updatedContact, error: updateError } = await supabase
+      .from('contacts')
+      .update({
+        custom_attributes: nextAttributes,
+        last_active_at: new Date().toISOString(),
+      })
+      .eq('id', conversation.contact_id)
+      .eq('organization_id', orgId)
+      .select('id, custom_attributes')
+      .single();
+
+    if (updateError) {
+      console.error('[Conversations] Error updating potential lead:', updateError);
+      return res.status(500).json({ error: 'No se pudo actualizar el estado de cliente potencial' });
+    }
+
+    res.json({
+      success: true,
+      isPotentialLead: !!updatedContact?.custom_attributes?.is_potential_lead,
+    });
+  } catch (error) {
+    console.error('[Conversations] Error updating potential lead:', error);
+    res.status(500).json({ error: 'Failed to update potential lead' });
+  }
+});
+
 // POST /api/conversations/:id/reactivate-bot — clears contact bot_state (handoff/capture)
 // so the bot resumes responding to this conversation.
 router.post('/:id/reactivate-bot', async (req, res) => {
@@ -448,6 +599,13 @@ router.post('/:id/send', async (req, res) => {
     if (!text && !mediaUrl && !hasLocation) {
       return res.status(400).json({ error: 'El mensaje o el archivo no pueden estar vacíos' });
     }
+
+    const normalizedMediaType = mediaType ? String(mediaType) : 'image';
+    const allowedMediaTypes = ['image', 'video', 'audio', 'document', 'sticker'];
+    if (mediaUrl && !allowedMediaTypes.includes(normalizedMediaType)) {
+      return res.status(400).json({ error: 'Tipo de archivo no válido' });
+    }
+    const persistedMediaType = normalizedMediaType === 'sticker' ? 'image' : normalizedMediaType;
 
     const orgId = (req as any).organizationId;
     if (!orgId) return res.status(404).json({ error: 'Organization not found' });
@@ -569,13 +727,13 @@ router.post('/:id/send', async (req, res) => {
         const isBase64 = typeof mediaUrl === 'string' && mediaUrl.startsWith('data:');
         if (isBase64 && adapter.sendMediaBuffer) {
           sendResult = await adapter.sendMediaBuffer(correctedPhone, mediaUrl, {
-            type: mediaType || 'image',
+            type: normalizedMediaType,
             caption: text || caption || '',
             filename: req.body.filename,
           });
         } else {
           sendResult = await adapter.sendMediaMessage(correctedPhone, mediaUrl, {
-            type: mediaType || 'image',
+            type: normalizedMediaType,
             caption: text || caption || '',
           });
         }
@@ -603,7 +761,7 @@ router.post('/:id/send', async (req, res) => {
       } else if (mediaUrl) {
         sendResult = await adapter.sendMediaMessage(correctedPhone, mediaUrl, {
           jid: contactJid,
-          type: mediaType || 'image',
+          type: normalizedMediaType,
           caption: text || caption || '',
           filename: req.body.filename,
         });
@@ -662,14 +820,14 @@ router.post('/:id/send', async (req, res) => {
         conversation_id: id,
         contact_id: conversation.contact_id,
         direction: 'outbound',
-        type: hasLocation ? 'location' : mediaUrl ? (mediaType || 'image') : 'text',
+        type: hasLocation ? 'location' : mediaUrl ? persistedMediaType : 'text',
         whatsapp_message_id: msgId,
         content: hasLocation
           ? JSON.stringify(locationContent)
           : mediaUrl
           ? JSON.stringify({
               url: storedMediaUrl,
-              type: mediaType || 'image',
+              type: normalizedMediaType,
               filename: req.body.filename || 'adjunto',
               caption: (isBase64Media ? req.body.caption : text) || '',
             })
@@ -711,10 +869,10 @@ router.post('/:id/send', async (req, res) => {
       content: hasLocation
         ? locationContent
         : mediaUrl
-        ? { url: storedMediaUrl, type: mediaType || 'image', filename: req.body.filename, caption: text }
+        ? { url: storedMediaUrl, type: normalizedMediaType, filename: req.body.filename, caption: text }
         : (text || '').trim(),
       createdAt: savedMessage?.created_at,
-      type: hasLocation ? 'location' : mediaUrl ? (mediaType || 'image') : 'text',
+      type: hasLocation ? 'location' : mediaUrl ? persistedMediaType : 'text',
       status: 'sent'
     });
   } catch (error: any) {

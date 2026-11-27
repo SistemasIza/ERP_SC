@@ -185,16 +185,29 @@ export const deleteUsersBulk = async (ids: string[]) => {
 };
 
 export const getConversations = async (
-  params?: { limit?: number; offset?: number; search?: string; channel?: string; status?: string; conversationId?: string },
+  params?: { limit?: number; offset?: number; search?: string; channel?: string; status?: string; conversationId?: string; summary?: boolean },
   signal?: AbortSignal
 ) => {
   try {
-    const response = await api.get('/conversations', { params, signal });
+    const response = await api.get('/conversations', {
+      params: params?.summary ? { ...params, summary: 1 } : params,
+      signal,
+    });
     return response.data;
   } catch (error: any) {
     if (error?.name !== 'CanceledError' && error?.code !== 'ERR_CANCELED') {
       console.error('Error fetching conversations:', error);
     }
+    throw error;
+  }
+};
+
+export const getStickerLibrary = async () => {
+  try {
+    const response = await api.get('/conversations/stickers');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching sticker library:', error);
     throw error;
   }
 };
@@ -242,6 +255,16 @@ export const updateConversationTags = async (id: string, tags: string[]) => {
     return response.data;
   } catch (error) {
     console.error('Error updating conversation tags:', error);
+    throw error;
+  }
+};
+
+export const updateConversationLead = async (id: string, isPotentialLead: boolean) => {
+  try {
+    const response = await api.put(`/conversations/${id}/lead`, { isPotentialLead });
+    return response.data;
+  } catch (error) {
+    console.error('Error updating conversation lead:', error);
     throw error;
   }
 };

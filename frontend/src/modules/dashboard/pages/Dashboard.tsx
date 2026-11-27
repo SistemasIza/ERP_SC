@@ -37,7 +37,7 @@ export const Dashboard = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [showCustomRange, setShowCustomRange] = useState(false);
-  const [crm, setCrm] = useState({ totalClients: 0, totalDeals: 0, totalValue: 0, wonValue: 0 });
+  const [crm, setCrm] = useState({ totalClients: 0, totalDeals: 0, openDeals: 0, totalValue: 0, wonValue: 0, pipelineValue: 0, totalSpent: 0 });
   const [moduleCounts, setModuleCounts] = useState({ orders: 0, quotes: 0, promotions: 0, reminders: 0 });
   const [dashboardStats, setDashboardStats] = useState({
     totalMessages: 0, messageTrend: 0, totalContacts: 0, contactTrend: 0,
@@ -85,8 +85,11 @@ export const Dashboard = () => {
           setCrm({
             totalClients: crmData?.totalClients || 0,
             totalDeals: crmData?.totalDeals || 0,
+            openDeals: crmData?.openDeals || 0,
             totalValue: crmData?.totalValue || 0,
-            wonValue: crmData?.wonValue || 0
+            wonValue: crmData?.wonValue || 0,
+            pipelineValue: crmData?.pipelineValue || crmData?.totalValue || 0,
+            totalSpent: crmData?.totalSpent || 0
           });
         } catch (e) {
           console.error('Error fetching CRM metrics:', e);
@@ -184,10 +187,10 @@ export const Dashboard = () => {
             />
             <MetricCard
               title="Oportunidades"
-              value={crm.totalDeals.toLocaleString()}
+              value={(crm.openDeals || crm.totalDeals).toLocaleString()}
               icon={<Target className="w-5 h-5" />}
-              trend={{ value: 0, label: 'en pipeline', direction: 'neutral' }}
-              sparkline={[crm.totalDeals]}
+              trend={{ value: 0, label: 'abiertas en pipeline', direction: 'neutral' }}
+              sparkline={[crm.openDeals || crm.totalDeals]}
               delay={0.2}
             />
             <MetricCard
@@ -199,11 +202,11 @@ export const Dashboard = () => {
               delay={0.3}
             />
             <MetricCard
-              title="Total Gastado"
-              value={formatCurrency(crm.totalValue)}
+              title="Total gastado"
+              value={formatCurrency(crm.totalSpent)}
               icon={<Wallet className="w-5 h-5" />}
-              trend={{ value: 0, label: 'valor del pipeline', direction: 'neutral' }}
-              sparkline={[crm.totalValue]}
+              trend={{ value: 0, label: 'en órdenes pagadas/enviadas', direction: 'neutral' }}
+              sparkline={[crm.totalSpent]}
               delay={0.4}
             />
           </div>

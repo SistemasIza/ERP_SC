@@ -373,6 +373,7 @@ export class MultiWhatsAppService {
             organizationId: connection.organizationId,
             keyBase: msg.key?.id || `baileys-${Date.now()}`,
             filename: formattedMessage.media.filename,
+            folder: formattedMessage.type === 'sticker' || formattedMessage.media?.type === 'sticker' ? 'stickers' : undefined,
           });
           formattedMessage.media.url = url;
           formattedMessage.media.mime_type = mimeType;
@@ -824,10 +825,12 @@ export class MultiWhatsAppService {
         // un Buffer o una URL real, así que se decodifica antes de enviar.
         const dataMatch = typeof url === 'string' ? url.match(/^data:([^;,]+)(?:;[^,]*)*;base64,(.+)$/s) : null;
         const media = dataMatch ? Buffer.from(dataMatch[2], 'base64') : { url };
-        const mediaKey = type === 'image' ? 'image' : type === 'video' ? 'video' : type === 'audio' ? 'audio' : 'document';
+        const mediaKey = type === 'image' ? 'image' : type === 'video' ? 'video' : type === 'audio' ? 'audio' : type === 'sticker' ? 'sticker' : 'document';
 
         const payload: any = { [mediaKey]: media };
-        if (mediaKey === 'audio') {
+        if (mediaKey === 'sticker') {
+          payload.mimetype = 'image/webp';
+        } else if (mediaKey === 'audio') {
           // WhatsApp solo reproduce notas de voz en ogg/opus; el navegador graba webm.
           payload.mimetype = 'audio/ogg; codecs=opus';
           if (Buffer.isBuffer(media)) {

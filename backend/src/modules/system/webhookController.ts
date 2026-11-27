@@ -449,6 +449,7 @@ async function processIncomingMessage(message: any, changeValue: any) {
         direction: 'inbound',
         type: messageType,
         content: typeof storedContent === 'string' ? storedContent : JSON.stringify(storedContent),
+        media_url: isMediaMessageType(messageType) && storedContent && typeof storedContent === 'object' ? storedContent.url : null,
         whatsapp_message_id: message.id
       })
       .select('id')

@@ -67,9 +67,9 @@ export const Login = () => {
   return (
     <div className="min-h-screen bg-[#171717] font-sans text-white selection:bg-primary-500/30">
       <main className="mx-auto flex min-h-screen w-full max-w-[400px] flex-col justify-center px-6 py-10">
-        <div className="mb-10 flex items-center gap-2.5">
-          <MessageCircle className="h-5 w-5 text-primary-400" />
-          <span className="text-base font-medium tracking-tight">CRM GSC</span>
+        <div className="mb-10 flex items-center gap-3">
+          <img src="/logo-en-blanco.png" alt="CRM GSC" className="h-10 w-10 rounded-xl object-contain" />
+          <span className="text-lg font-semibold tracking-tight text-white">CRM GSC</span>
         </div>
 
         <div className="mb-8">

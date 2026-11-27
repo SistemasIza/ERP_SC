@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getConversations, getConversationMessages, getConversationMessageUpdates, deleteConversation, deleteUser, getCatalogs, getTeamUsers, assignAgentToConversation, updateConversationTags } from '../../../services/api';
+import { getConversations, getConversationMessages, getConversationMessageUpdates, deleteConversation, deleteUser, getCatalogs, getTeamUsers, assignAgentToConversation, updateConversationTags, updateConversationLead, getStickerLibrary } from '../../../services/api';
 import api from '../../../services/api';
 import {
   Check, CheckCheck, Send, Search, Filter, Users, MoreVertical, Smile, Paperclip, Mic, Star, MessageCircle, Trash2, ChevronLeft, ChevronRight, ChevronDown, Store, Package, X, Bell, BellOff, Shield, Plus, Cloud, QrCode, Bot, User, MapPin, Download, Sticker, Camera, Video, Tag
@@ -254,12 +254,14 @@ export const Conversations = () => {
   const [sending, setSending] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [savingTags, setSavingTags] = useState(false);
+  const [savingLead, setSavingLead] = useState(false);
   const [whatsappConnections, setWhatsappConnections] = useState<{ id: string; display_name: string }[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterChannel, setFilterChannel] = useState('all');
+  const [pendingChatsCount, setPendingChatsCount] = useState(0);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isChatMenuOpen, setIsChatMenuOpen] = useState(false);
@@ -394,9 +396,10 @@ export const Conversations = () => {
     loadingListRef.current = true;
 
     try {
-      const data = await getConversations({ ...conversationQuery, offset: 0 }, controller.signal);
+      const data = await getConversations({ ...conversationQuery, offset: 0, summary: true }, controller.signal);
       if (controller.signal.aborted || requestId !== listRequestIdRef.current) return;
-      const page = Array.isArray(data) ? data : [];
+      const page = Array.isArray(data) ? data : data?.conversations || [];
+      if (!Array.isArray(data)) setPendingChatsCount(Number(data?.pendingChatsCount) || 0);
       nextConversationOffsetRef.current = page.length;
       const newHash = JSON.stringify(page.map((conversation: any) => [
         conversation._id,
@@ -776,6 +779,15 @@ export const Conversations = () => {
       const items = Array.isArray(result.messages) ? result.messages : [];
       messageVersionRef.current = `${versionFor(items)}|e:${result.eventVersion || 0}`;
       setMessages(items);
+      const hadUnreadMessages = conversationsRef.current.some(conversation =>
+        conversation._id === selectedConversationId && conversation.unreadCount > 0
+      );
+      if (hadUnreadMessages) {
+        setConversations(current => current.map(conversation =>
+          conversation._id === selectedConversationId ? { ...conversation, unreadCount: 0 } : conversation
+        ));
+        setPendingChatsCount(current => Math.max(0, current - 1));
+      }
     };
 
     const pollUpdates = async () => {
@@ -823,6 +835,20 @@ export const Conversations = () => {
     };
   }, [selectedConversationId]);
 
+  const fetchStickerLibrary = async () => {
+    setLoadingStickers(true);
+    setStickerLibraryError('');
+    try {
+      const data = await getStickerLibrary();
+      setStickerLibrary(Array.isArray(data) ? data : []);
+    } catch {
+      setStickerLibrary([]);
+      setStickerLibraryError('No se pudieron cargar los stickers.');
+    } finally {
+      setLoadingStickers(false);
+    }
+  };
+
   const fetchCatalogs = async () => {
     if (catalogs.length > 0) return;
     try {
@@ -841,6 +867,41 @@ export const Conversations = () => {
       fetchCatalogs();
     }
     setIsCatalogOpen(!isCatalogOpen);
+  };
+
+  const handleSelectSticker = async (sticker: any) => {
+    if (!selectedConv || sending) return;
+    setShowEmojiPicker(false);
+    setSending(true);
+
+    const optimistic = {
+      _id: `tmp-${Date.now()}`,
+      direction: 'outbound',
+      content: JSON.stringify({ url: sticker.url, type: 'sticker', mime_type: sticker.mimeType || 'image/webp' }),
+      createdAt: new Date().toISOString(),
+      type: 'image',
+      status: 'sending',
+    };
+    setMessages(prev => [...prev, optimistic]);
+
+    try {
+      const response = await api.post(`/conversations/${selectedConv._id}/send`, {
+        mediaUrl: sticker.url,
+        mediaType: 'sticker',
+        caption: '',
+        whatsapp_connection_id: selectedConnectionId || undefined,
+      });
+      setMessages(prev => prev.map(message => message._id === optimistic._id ? response.data : message));
+    } catch (error: any) {
+      setMessages(prev => prev.filter(message => message._id !== optimistic._id));
+      addNotification({
+        type: 'error',
+        title: 'Error',
+        message: error.response?.data?.error || 'No se pudo enviar el sticker. Verifica la conexión.',
+      });
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleSelectProduct = async (item: any) => {
@@ -1053,6 +1114,33 @@ export const Conversations = () => {
     await persistConversationTags(current.filter((t) => t !== tag));
   };
 
+  const handleTogglePotentialLead = async () => {
+    if (!selectedConv?._id || savingLead) return;
+    const nextValue = !selectedConv.contactId?.isPotentialLead;
+    setSavingLead(true);
+    try {
+      await updateConversationLead(selectedConv._id, nextValue);
+      setSelectedConv((prev: any) => prev ? {
+        ...prev,
+        contactId: prev.contactId ? { ...prev.contactId, isPotentialLead: nextValue } : prev.contactId,
+      } : prev);
+      setConversations((prev) => prev.map((c) =>
+        c._id === selectedConv._id
+          ? { ...c, contactId: c.contactId ? { ...c.contactId, isPotentialLead: nextValue } : c.contactId }
+          : c
+      ));
+      addNotification({
+        type: 'success',
+        title: nextValue ? 'Marcado como potencial' : 'Quitado de potenciales',
+        message: nextValue ? 'El contacto se marcó como cliente potencial.' : 'El contacto ya no está marcado como potencial.',
+      });
+    } catch (error) {
+      addNotification({ type: 'error', title: 'Error', message: 'No se pudo actualizar el cliente potencial.' });
+    } finally {
+      setSavingLead(false);
+    }
+  };
+
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
@@ -1062,6 +1150,10 @@ export const Conversations = () => {
   const EMOJIS = ['😀', '😁', '😂', '🤣', '😃', '😄', '😅', '😆', '😉', '😊', '😋', '😎', '😍', '🥰', '😘', '😗', '😙', '😚', '🙂', '🤗', '🤩', '🤔', '🤨', '😐', '😑', '😶', '🙄', '😏', '😣', '😥', '😮', '🤐', '😯', '😪', '😫', '😴', '😌', '😛', '😜', '😝', '🤤', '😒', '😓', '😔', '😕', '🙃', '🤑', '😲', '☹️', '🙁', '😖', '😞', '😟', '😤', '😢', '😭', '😦', '😧', '😨', '😩', '🤯', '😬', '😰', '😱', '🥵', '🥶', '😳', '🤪', '😵', '😡', '😠', '🤬', '👍', '👎', '👊', '✊', '🤛', '🤜', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✌️', '🤞', '🤟', '🤘', '👌', '💪', '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '🔥', '⭐', '✨', '💯', '🎉', '🎊', '🥳', '🎈', '🎁', '💡', '📌', '📍', '💀', '☠️', '👋', '🤚', '🖐️', '✋', '🖖', '🖕', '🤙', '💅'];
 
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [emojiPickerTab, setEmojiPickerTab] = useState<'emojis' | 'stickers'>('emojis');
+  const [stickerLibrary, setStickerLibrary] = useState<any[]>([]);
+  const [loadingStickers, setLoadingStickers] = useState(false);
+  const [stickerLibraryError, setStickerLibraryError] = useState('');
 
   const handleEmojiSelect = (emoji: string) => {
     setMessageText(prev => prev + emoji);
@@ -1255,6 +1347,7 @@ export const Conversations = () => {
     const parsed = parseContentObject(content);
     if (!parsed || typeof parsed !== 'object') return false;
     if (parsed.type === 'sticker' || parsed.sticker || parsed.stickerMessage) return true;
+    if (parsed.raw?.sticker || parsed.raw?.stickerMessage) return true;
     return parsed.media?.type === 'sticker';
   };
 
@@ -1271,7 +1364,8 @@ export const Conversations = () => {
       if (parsed.type === 'contact' || parsed.contacts) return { text: 'Contacto', kind: 'contact' };
       if (text) return { text, kind: null };
       const hasMedia = parsed.url || parsed.media || parsed.imageMessage || parsed.videoMessage
-        || parsed.audioMessage || parsed.documentMessage || parsed.stickerMessage || parsed.sticker;
+        || parsed.audioMessage || parsed.documentMessage || parsed.stickerMessage || parsed.sticker
+        || parsed.raw?.stickerMessage || parsed.raw?.sticker;
       if (!hasMedia) return { text, kind: null };
       if (isStickerMessage(parsed)) return { text: 'Sticker', kind: 'sticker' };
       const kind = mediaKindFrom(parsed.mime_type || parsed.mimeType, parsed.media?.type || parsed.type);
@@ -1765,7 +1859,32 @@ export const Conversations = () => {
         {/* Sidebar Header */}
         <div className="pt-6 px-5 md:px-6 pb-3">
           <div className="flex items-center justify-between mb-5">
-            <h1 className="text-xl font-black text-gray-900 dark:text-white tracking-tight">Conversaciones</h1>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="min-w-0">
+                <h1 className="text-lg xl:text-xl font-black text-gray-900 dark:text-white tracking-tight truncate">Conversaciones</h1>
+                <button
+                  type="button"
+                  onClick={() => { setFilterStatus('unread'); setIsFilterOpen(false); }}
+                  className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-gray-500 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors"
+                  title="Ver chats con mensajes sin leer"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${pendingChatsCount > 0 ? 'bg-accent-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                  {pendingChatsCount === 0
+                    ? 'Sin chats pendientes'
+                    : pendingChatsCount === 1
+                      ? 'Chat pendiente por responder'
+                      : 'Chats pendientes por responder'}
+                </button>
+              </div>
+              <span
+                className={`h-6 min-w-[24px] px-1.5 rounded-full inline-flex items-center justify-center text-[10px] font-semibold ${pendingChatsCount > 0
+                  ? 'bg-accent-500/15 text-accent-700 dark:text-accent-300'
+                  : 'bg-gray-100 text-gray-500 dark:bg-white/5 dark:text-gray-400'}`}
+                aria-label={`${pendingChatsCount} chats pendientes`}
+              >
+                {pendingChatsCount > 99 ? '99+' : pendingChatsCount}
+              </span>
+            </div>
             <div className="flex items-center gap-1">
               <button
                 onClick={openNewConversationModal}
@@ -1809,6 +1928,11 @@ export const Conversations = () => {
                       >
                         <f.icon className="w-3 h-3" />
                         {f.label}
+                        {f.id === 'unread' && (
+                          <span className="ml-auto min-w-[18px] h-4 px-1 rounded-full bg-accent-500/15 text-accent-700 dark:text-accent-300 inline-flex items-center justify-center text-[9px] font-semibold">
+                            {pendingChatsCount > 99 ? '99+' : pendingChatsCount}
+                          </span>
+                        )}
                       </button>
                     ))}
                     <div className="px-3 py-1.5 border-t border-gray-100 dark:border-white/5 mt-1 mb-1">
@@ -2137,6 +2261,18 @@ export const Conversations = () => {
                             {savingTags ? '...' : 'Agregar'}
                           </button>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={handleTogglePotentialLead}
+                          disabled={savingLead}
+                          className={`h-6 px-2 rounded-md text-[10px] font-bold transition-colors disabled:opacity-40 ${selectedConv.contactId?.isPotentialLead
+                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25'
+                            : 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/10'}`}
+                          title={selectedConv.contactId?.isPotentialLead ? 'Quitar de clientes potenciales' : 'Marcar como cliente potencial'}
+                        >
+                          {savingLead ? '...' : selectedConv.contactId?.isPotentialLead ? 'Potencial ✓' : 'Marcar potencial'}
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -2333,9 +2469,11 @@ export const Conversations = () => {
                           </div>
                         ) : unavailableMedia ? (
                           <div className={`-mx-5 -mt-3 mb-2 rounded-t-2xl px-4 py-3 flex items-center gap-3 ${isMe ? 'bg-gray-50 dark:bg-white/5' : 'bg-white/15'}`}>
-                            {unavailableMedia === 'Audio no disponible'
-                              ? <Mic className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-gray-400' : 'text-white/80'}`} />
-                              : <Paperclip className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-gray-400' : 'text-white/80'}`} />}
+                            {unavailableMedia === 'Sticker no disponible'
+                              ? <Sticker className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-accent-500' : 'text-white'}`} />
+                              : unavailableMedia === 'Audio no disponible'
+                                ? <Mic className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-gray-400' : 'text-white/80'}`} />
+                                : <Paperclip className={`w-5 h-5 flex-shrink-0 ${isMe ? 'text-gray-400' : 'text-white/80'}`} />}
                             <span className={`text-xs font-semibold ${isMe ? 'text-gray-500 dark:text-gray-400' : 'text-white'}`}>{unavailableMedia}</span>
                           </div>
                         ) : null}
@@ -2570,24 +2708,83 @@ export const Conversations = () => {
                       )}
                     </div>
                     <div className="relative">
-                      <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-1.5 md:p-2 text-gray-400 hover:text-accent-500 transition-all">
+                      <button
+                        onClick={() => {
+                          const nextOpen = !showEmojiPicker;
+                          setShowEmojiPicker(nextOpen);
+                          if (nextOpen) void fetchStickerLibrary();
+                        }}
+                        className={`p-1.5 md:p-2 transition-all ${showEmojiPicker ? 'text-accent-500 bg-accent-500/10 rounded-lg' : 'text-gray-400 hover:text-accent-500'}`}
+                        title="Emojis y stickers"
+                      >
                         <Smile className="w-4 h-4 md:w-5 md:h-5" />
                       </button>
                       {showEmojiPicker && (
                         <>
                           <div className="fixed inset-0 z-40" onClick={() => setShowEmojiPicker(false)} />
                           <div className="absolute bottom-full right-0 mb-2 w-72 md:w-80 bg-white dark:bg-dark-card border border-gray-100 dark:border-white/5 rounded-2xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                            <div className="p-3 border-b border-gray-100 dark:border-white/5">
-                              <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Emojis</span>
+                            <div className="p-2 border-b border-gray-100 dark:border-white/5 flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setEmojiPickerTab('emojis')}
+                                className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1.5 text-[10px] font-semibold transition-colors ${emojiPickerTab === 'emojis' ? 'bg-accent-500/10 text-accent-600 dark:text-accent-300' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5'}`}
+                              >
+                                <Smile className="w-3.5 h-3.5" />
+                                Emojis
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEmojiPickerTab('stickers')}
+                                className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1.5 text-[10px] font-semibold transition-colors ${emojiPickerTab === 'stickers' ? 'bg-accent-500/10 text-accent-600 dark:text-accent-300' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/5'}`}
+                              >
+                                <Sticker className="w-3.5 h-3.5" />
+                                Stickers
+                              </button>
                             </div>
-                            <div className="max-h-48 overflow-y-auto p-3 grid grid-cols-8 gap-1">
-                              {EMOJIS.map((emoji, i) => (
-                                <button key={i} onClick={() => handleEmojiSelect(emoji)}
-                                  className="w-8 h-8 flex items-center justify-center text-lg hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-all hover:scale-110">
-                                  {emoji}
-                                </button>
-                              ))}
-                            </div>
+                            {emojiPickerTab === 'emojis' ? (
+                              <div className="max-h-48 overflow-y-auto p-3 grid grid-cols-8 gap-1">
+                                {EMOJIS.map((emoji, i) => (
+                                  <button key={i} onClick={() => handleEmojiSelect(emoji)}
+                                    className="w-8 h-8 flex items-center justify-center text-lg hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-all hover:scale-110">
+                                    {emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="max-h-56 overflow-y-auto p-3">
+                                {loadingStickers ? (
+                                  <div className="min-h-32 flex flex-col items-center justify-center gap-2 text-gray-400">
+                                    <Loader size="xs" />
+                                    <span className="text-[10px] font-medium">Cargando stickers...</span>
+                                  </div>
+                                ) : stickerLibraryError ? (
+                                  <div className="min-h-32 flex flex-col items-center justify-center gap-2 text-center">
+                                    <p className="text-[10px] font-medium text-gray-500 dark:text-gray-400">{stickerLibraryError}</p>
+                                    <button type="button" onClick={() => void fetchStickerLibrary()} className="text-[10px] font-semibold text-accent-600 dark:text-accent-300 hover:underline">Reintentar</button>
+                                  </div>
+                                ) : stickerLibrary.length === 0 ? (
+                                  <div className="min-h-32 flex flex-col items-center justify-center gap-2 text-center px-4">
+                                    <Sticker className="w-7 h-7 text-gray-300 dark:text-gray-600" />
+                                    <p className="text-[10px] font-medium text-gray-500 dark:text-gray-400">Los stickers que recibas aparecerán aquí automáticamente.</p>
+                                  </div>
+                                ) : (
+                                  <div className="grid grid-cols-4 gap-2">
+                                    {stickerLibrary.map(sticker => (
+                                      <button
+                                        key={sticker.id}
+                                        type="button"
+                                        onClick={() => void handleSelectSticker(sticker)}
+                                        disabled={sending}
+                                        title="Enviar sticker"
+                                        className="aspect-square rounded-xl bg-gray-50 dark:bg-white/5 hover:bg-accent-500/10 p-1.5 flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
+                                      >
+                                        <img src={sticker.url} alt="Sticker guardado" className="w-full h-full object-contain" />
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </>
                       )}

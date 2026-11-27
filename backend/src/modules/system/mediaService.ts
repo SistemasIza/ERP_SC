@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { createHash } from 'crypto';
 import { supabase } from '../../core/config/supabase';
 
 const BUCKET = 'chat-media';
@@ -22,9 +23,13 @@ export async function uploadChatMedia(params: {
   organizationId: string;
   keyBase: string;
   filename?: string;
+  folder?: 'stickers';
 }): Promise<string> {
   const ext = extensionFromMime(params.mimeType, params.filename);
-  const path = `${params.organizationId}/${safeKey(params.keyBase)}.${ext}`;
+  const fileKey = params.folder === 'stickers'
+    ? `sticker-${createHash('sha256').update(params.buffer).digest('hex')}`
+    : safeKey(params.keyBase);
+  const path = `${params.organizationId}/${params.folder ? `${params.folder}/` : ''}${fileKey}.${ext}`;
   const { error } = await supabase.storage.from(BUCKET).upload(path, params.buffer, {
     contentType: params.mimeType || 'application/octet-stream',
     upsert: true,
@@ -109,6 +114,7 @@ export async function persistCloudMediaMessage(message: any, opts: {
     organizationId: opts.organizationId,
     keyBase: opts.messageId,
     filename,
+    folder: type === 'sticker' ? 'stickers' : undefined,
   });
 
   return {
