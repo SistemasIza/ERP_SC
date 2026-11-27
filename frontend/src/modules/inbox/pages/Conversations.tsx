@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getConversations, getConversationMessages, getConversationMessageUpdates, deleteConversation, deleteUser, getCatalogs, getTeamUsers, assignAgentToConversation, updateConversationTags, updateConversationLead, getStickerLibrary } from '../../../services/api';
+import { getConversations, getConversationMessages, getConversationMessageUpdates, deleteConversation, deleteUser, getCatalogs, getTeamUsers, assignAgentToConversation, updateConversationTags, updateConversationLead, getStickerLibrary, saveSticker } from '../../../services/api';
 import api from '../../../services/api';
 import {
   Check, CheckCheck, Send, Search, Filter, Users, MoreVertical, Smile, Paperclip, Mic, Star, MessageCircle, Trash2, ChevronLeft, ChevronRight, ChevronDown, Store, Package, X, Bell, BellOff, Shield, Plus, Cloud, QrCode, Bot, User, MapPin, Download, Sticker, Camera, Video, Tag
@@ -1154,6 +1154,7 @@ export const Conversations = () => {
   const [stickerLibrary, setStickerLibrary] = useState<any[]>([]);
   const [loadingStickers, setLoadingStickers] = useState(false);
   const [stickerLibraryError, setStickerLibraryError] = useState('');
+  const [savingStickerMessageId, setSavingStickerMessageId] = useState<string | null>(null);
 
   const handleEmojiSelect = (emoji: string) => {
     setMessageText(prev => prev + emoji);
@@ -1351,6 +1352,43 @@ export const Conversations = () => {
     return parsed.media?.type === 'sticker';
   };
 
+  const handleSaveSticker = async (message: any) => {
+    if (!message?._id || savingStickerMessageId) return;
+    const parsed = parseContentObject(message.content);
+    if (parsed?.sticker_library_url) return;
+
+    setSavingStickerMessageId(message._id);
+    try {
+      const saved = await saveSticker(message._id);
+      setMessages(prev => prev.map(current => {
+        if (current._id !== message._id) return current;
+        const currentContent = parseContentObject(current.content);
+        return {
+          ...current,
+          content: JSON.stringify({
+            ...(currentContent || {}),
+            sticker_library_url: saved.url,
+            sticker_library_saved_at: saved.createdAt || new Date().toISOString(),
+          }),
+        };
+      }));
+      setStickerLibrary(prev => [saved, ...prev.filter(sticker => sticker.url !== saved.url)]);
+      addNotification({
+        type: 'success',
+        title: 'Sticker guardado',
+        message: 'Ya está disponible en la pestaña Stickers.',
+      });
+    } catch (error: any) {
+      addNotification({
+        type: 'error',
+        title: 'Error',
+        message: error.response?.data?.error || 'No se pudo guardar el sticker.',
+      });
+    } finally {
+      setSavingStickerMessageId(null);
+    }
+  };
+
   type PreviewKind = 'image' | 'video' | 'audio' | 'document' | 'location' | 'sticker' | 'contact' | null;
 
   // Vista previa del último mensaje en la lista: si el mensaje no tiene texto
@@ -1522,6 +1560,7 @@ export const Conversations = () => {
     body: parseMessage(message.content),
     media: getMessageMedia(message.content),
     sticker: isStickerMessage(message.content),
+    stickerSaved: Boolean(parseContentObject(message.content)?.sticker_library_url),
     location: getMessageLocation(message.content),
     buttons: parseButtons(message.content),
     numericButtons: isNumericButtons(message.content),
@@ -2446,7 +2485,21 @@ export const Conversations = () => {
                         : 'bg-gradient-to-br from-accent-500 to-accent-600 text-white rounded-bl-[4px] border border-white/15 shadow-md shadow-accent-500/20'
                         }`}>
                         {sticker && media ? (
-                          <StickerMedia url={media.url} isMe={isMe} />
+                          <>
+                            <StickerMedia url={media.url} isMe={isMe} />
+                            {!isMe && (
+                              <button
+                                type="button"
+                                onClick={() => void handleSaveSticker(m)}
+                                disabled={rendered.stickerSaved || Boolean(savingStickerMessageId)}
+                                title={rendered.stickerSaved ? 'Sticker guardado' : 'Guardar sticker para reutilizarlo'}
+                                className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/15 px-3 py-1.5 text-[10px] font-medium text-white transition-colors hover:bg-white/25 disabled:cursor-default disabled:opacity-80"
+                              >
+                                {rendered.stickerSaved ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                                {savingStickerMessageId === m._id ? 'Guardando...' : rendered.stickerSaved ? 'Guardado' : 'Guardar'}
+                              </button>
+                            )}
+                          </>
                         ) : media ? (
                           <div className="-mx-5 -mt-3 mb-2 rounded-t-2xl overflow-hidden">
                             {media.type === 'image' ? (
@@ -2765,7 +2818,7 @@ export const Conversations = () => {
                                 ) : stickerLibrary.length === 0 ? (
                                   <div className="min-h-32 flex flex-col items-center justify-center gap-2 text-center px-4">
                                     <Sticker className="w-7 h-7 text-gray-300 dark:text-gray-600" />
-                                    <p className="text-[10px] font-medium text-gray-500 dark:text-gray-400">Los stickers que recibas aparecerán aquí automáticamente.</p>
+                                    <p className="text-[10px] font-medium text-gray-500 dark:text-gray-400">Guarda los stickers que quieras reutilizar desde cada mensaje.</p>
                                   </div>
                                 ) : (
                                   <div className="grid grid-cols-4 gap-2">

@@ -3,7 +3,7 @@ import { supabase } from '../../core/config/supabase';
 import { multiWhatsAppService } from '../integrations/multiWhatsAppService';
 import { whatsappCloudService } from '../integrations/platform/whatsappCloudService';
 import { auditLogService } from '../audit/auditLogService';
-import { uploadDataUrlToChatMedia } from '../system/mediaService';
+import { uploadChatMedia, uploadDataUrlToChatMedia } from '../system/mediaService';
 import { getMessageChangeVersion, publishMessageChange, waitForMessageChange } from './messageEvents';
 
 const router = express.Router();
@@ -50,6 +50,7 @@ const parseStickerMedia = (content: unknown, mediaUrl?: string | null) => {
   return {
     url,
     mimeType: parsed.mime_type || parsed.media?.mime_type || 'image/webp',
+    content: parsed,
   };
 };
 
@@ -254,58 +255,119 @@ router.get('/stickers', async (req, res) => {
     const orgId = (req as any).organizationId;
     if (!orgId) return res.status(404).json({ error: 'Organization not found' });
 
-    const { data, error } = await supabase
-      .from('messages')
-      .select('id, content, media_url, created_at')
-      .eq('organization_id', orgId)
-      .eq('direction', 'inbound')
-      .eq('type', 'image')
-      .ilike('content', '%sticker%')
-      .order('created_at', { ascending: false })
-      .limit(1000);
-
-    if (error) throw error;
-
-    const { data: storedStickerFiles, error: storageError } = await supabase.storage
+    const { data: storedStickerFiles, error } = await supabase.storage
       .from('chat-media')
       .list(`${orgId}/stickers`, {
         limit: 1000,
         sortBy: { column: 'created_at', order: 'desc' },
       });
-    if (storageError) console.warn('[Conversations API] Failed to list saved stickers:', storageError);
+    if (error) throw error;
 
-    const seenUrls = new Set<string>();
-    const stickers: Array<{ id: string; url: string; mimeType: string; createdAt: string }> = [];
-    for (const file of storedStickerFiles || []) {
-      if (!file.name.toLowerCase().endsWith('.webp')) continue;
-      const url = supabase.storage.from('chat-media').getPublicUrl(`${orgId}/stickers/${file.name}`).data.publicUrl;
-      if (seenUrls.has(url)) continue;
-      seenUrls.add(url);
-      stickers.push({
+    const stickers = (storedStickerFiles || [])
+      .filter(file => file.name.toLowerCase().endsWith('.webp'))
+      .map(file => ({
         id: `stored-${file.name}`,
-        url,
+        url: supabase.storage.from('chat-media').getPublicUrl(`${orgId}/stickers/${file.name}`).data.publicUrl,
         mimeType: file.metadata?.mimetype || 'image/webp',
         createdAt: file.created_at || new Date(0).toISOString(),
-      });
-    }
+      }));
 
-    for (const message of data || []) {
-      const sticker = parseStickerMedia(message.content, message.media_url);
-      if (!sticker || seenUrls.has(sticker.url)) continue;
-      seenUrls.add(sticker.url);
-      stickers.push({
-        id: message.id,
-        url: sticker.url,
-        mimeType: sticker.mimeType,
-        createdAt: message.created_at,
-      });
-    }
-
-    stickers.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     res.json(stickers);
   } catch (error: any) {
     console.error('[Conversations API] Error fetching stickers:', error);
     res.status(500).json({ error: 'No se pudieron cargar los stickers' });
+  }
+});
+
+router.post('/stickers/save', async (req, res) => {
+  try {
+    const orgId = (req as any).organizationId;
+    if (!orgId) return res.status(404).json({ error: 'Organization not found' });
+
+    const messageId = String(req.body?.messageId || '');
+    if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(messageId)) {
+      return res.status(400).json({ error: 'Sticker no válido' });
+    }
+
+    const { data: message, error } = await supabase
+      .from('messages')
+      .select('id, conversation_id, organization_id, direction, type, content, media_url')
+      .eq('id', messageId)
+      .eq('organization_id', orgId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!message || message.direction !== 'inbound' || message.type !== 'image') {
+      return res.status(404).json({ error: 'Sticker no encontrado' });
+    }
+
+    const sticker = parseStickerMedia(message.content, message.media_url);
+    if (!sticker) return res.status(400).json({ error: 'El mensaje no es un sticker' });
+    if (!/^image\/webp$/i.test(sticker.mimeType)) {
+      return res.status(400).json({ error: 'Formato de sticker no válido' });
+    }
+
+    let sourceUrl: URL;
+    try {
+      sourceUrl = new URL(sticker.url);
+    } catch {
+      return res.status(400).json({ error: 'Sticker no válido' });
+    }
+
+    const sourcePrefix = `/storage/v1/object/public/chat-media/${orgId}/`;
+    if (!sourceUrl.pathname.startsWith(sourcePrefix)) {
+      return res.status(400).json({ error: 'Sticker no válido' });
+    }
+
+    let relativePath: string;
+    try {
+      relativePath = decodeURIComponent(sourceUrl.pathname.slice(sourcePrefix.length));
+    } catch {
+      return res.status(400).json({ error: 'Sticker no válido' });
+    }
+    if (!relativePath || relativePath.split('/').some(part => !part || part === '.' || part === '..')) {
+      return res.status(400).json({ error: 'Sticker no válido' });
+    }
+
+    const sourcePath = `${orgId}/${relativePath}`;
+    const expectedUrl = supabase.storage.from('chat-media').getPublicUrl(sourcePath).data.publicUrl;
+    if (expectedUrl !== sticker.url) return res.status(400).json({ error: 'Sticker no válido' });
+
+    const { data: sourceFile, error: downloadError } = await supabase.storage
+      .from('chat-media')
+      .download(sourcePath);
+    if (downloadError || !sourceFile) {
+      throw new Error(downloadError?.message || 'No se pudo descargar el sticker');
+    }
+
+    const url = await uploadChatMedia({
+      buffer: Buffer.from(await sourceFile.arrayBuffer()),
+      mimeType: sticker.mimeType,
+      organizationId: orgId,
+      keyBase: message.id,
+      folder: 'stickers',
+    });
+    const savedAt = new Date().toISOString();
+    const content = JSON.stringify({
+      ...sticker.content,
+      sticker_library_url: url,
+      sticker_library_saved_at: savedAt,
+    });
+    const { error: updateError } = await supabase
+      .from('messages')
+      .update({ content })
+      .eq('id', message.id)
+      .eq('organization_id', orgId);
+    if (updateError) throw updateError;
+
+    publishMessageChange({
+      organizationId: orgId,
+      conversationId: message.conversation_id,
+      messageId: message.id,
+    });
+    res.json({ id: message.id, url, mimeType: sticker.mimeType, createdAt: savedAt });
+  } catch (error: any) {
+    console.error('[Conversations API] Error saving sticker:', error);
+    res.status(500).json({ error: 'No se pudo guardar el sticker' });
   }
 });
 

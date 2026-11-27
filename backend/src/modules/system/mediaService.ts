@@ -114,7 +114,6 @@ export async function persistCloudMediaMessage(message: any, opts: {
     organizationId: opts.organizationId,
     keyBase: opts.messageId,
     filename,
-    folder: type === 'sticker' ? 'stickers' : undefined,
   });
 
   return {

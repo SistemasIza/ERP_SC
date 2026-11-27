@@ -373,7 +373,6 @@ export class MultiWhatsAppService {
             organizationId: connection.organizationId,
             keyBase: msg.key?.id || `baileys-${Date.now()}`,
             filename: formattedMessage.media.filename,
-            folder: formattedMessage.type === 'sticker' || formattedMessage.media?.type === 'sticker' ? 'stickers' : undefined,
           });
           formattedMessage.media.url = url;
           formattedMessage.media.mime_type = mimeType;

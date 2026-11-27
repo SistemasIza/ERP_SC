@@ -212,6 +212,11 @@ export const getStickerLibrary = async () => {
   }
 };
 
+export const saveSticker = async (messageId: string) => {
+  const response = await api.post('/conversations/stickers/save', { messageId });
+  return response.data;
+};
+
 export const getConversationMessages = async (
   id: string,
   options?: { markRead?: boolean; signal?: AbortSignal }
